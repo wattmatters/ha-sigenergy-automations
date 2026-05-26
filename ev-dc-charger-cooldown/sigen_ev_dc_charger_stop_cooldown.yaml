@@ -1,0 +1,41 @@
+alias: "SIGEN - EV DC CHARGER STOP COOLDOWN TIMER"
+description: >-
+  Starts a cooldown timer when the DC charger stops actively charging.
+  This prevents other automations (e.g. grid bias offset export) from
+  activating immediately after EV charging stops, giving any smoothing
+  filters time to settle and accurately reflect whether PV genuinely
+  exceeds load. Shared as an example — adapt sensor and timer entity
+  IDs to your own system.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs with your own.
+# Use Developer Tools → States to find the correct entity IDs.
+#
+# Key values to adjust:
+#   - Cooldown timer duration (set on the timer helper itself)
+#   - Output power threshold (currently > 0 W)
+#
+# ─────────────────────────────────────────────────────────────────
+
+mode: single
+
+trigger:
+  - platform: template
+    value_template: >-
+      {{ not (
+        states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+        and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0
+      ) }}
+    # Triggers when the DC charger is no longer actively charging —
+    # either the running state is not 'Charging', or output power has dropped to zero
+    # ← REPLACE both sensor entity IDs if yours differ
+
+condition: []
+
+action:
+  - action: timer.start
+    target:
+      entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE with your timer entity
