@@ -1,0 +1,275 @@
+alias: "SIGEN - CONTROL PEAK EXPORT TO GRID (with Debug & Zero Hero)"
+description: >-
+  Manages battery export to grid during the evening peak feed-in bonus period.
+  Runs every minute to start, adjust, or stop export based on battery SOC,
+  a configurable minimum export rate (Zero Hero protection), and whether an
+  AEMO critical event override is active. Shared as an example — adapt time
+  windows, rates, and entity IDs to your own system.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs and device_id values with your own.
+# Use Developer Tools → States to find the correct entity IDs.
+#
+# Key values to adjust:
+#   - Peak export window (after/before times)
+#   - Battery capacity is read from sensor.sigen_0_inverter_1_rated_battery_capacity
+#     Replace the sensor name if yours differs
+#   - Max export rate (your inverter/DNSP limit in kW)
+#
+# ─────────────────────────────────────────────────────────────────
+
+mode: single
+
+trigger:
+  - platform: time_pattern
+    minutes: "/1"
+
+condition:
+  - condition: time
+    after: "14:30:00"   # ← ADJUST: start monitoring from this time
+    before: "22:00:00"  # ← ADJUST: stop monitoring after this time
+
+action:
+  - choose:
+
+      # ── DEBUG SNAPSHOT at start of peak window ───────────────────
+      - conditions:
+          - condition: time
+            after: "17:58:00"
+            before: "18:02:00"   # ← ADJUST to match your peak window start
+        sequence:
+          - action: persistent_notification.create
+            data:
+              notification_id: export_debug
+              title: "🔍 Export Automation Debug (Peak Start)"
+              message: >-
+                Time: {{ now().strftime('%H:%M:%S') }}
+                Export Enabled: {{ states('input_boolean.battery_export_enabled') }}
+                Remote EMS: {{ states('switch.sigen_0_plant_remote_ems') }}
+                AEMO Override: {{ states('input_boolean.aemo_critical_override_active') }}
+                Battery Available: {{ states('sensor.sigen_0_inverter_1_available_battery_discharge_energy') }} kWh
+                Export Strategy: {{ states('input_text.battery_export_strategy') }}
+                SOC Now: {{ states('sensor.sigen_0_inverter_1_battery_soc') }}%
+                Min SOC Target (end of export): {{ states('input_number.battery_minimum_soc_end_of_export') }}%
+                SOC Headroom: {{ [states('sensor.sigen_0_inverter_1_battery_soc') | float(0) - states('input_number.battery_minimum_soc_end_of_export') | float(40), 0] | max | round(1) }}%
+                Minutes Remaining in Export Window: {{ ((20 - now().hour - now().minute / 60) * 60) | round(0) }} min
+                Min Export Rate (Zero Hero): {{ states('input_number.battery_minimum_export_rate_zero_hero') }} kW
+                Should trigger: {{ 
+                  states('input_boolean.battery_export_enabled') == 'on' and
+                  states('switch.sigen_0_plant_remote_ems') == 'off' and
+                  states('input_boolean.aemo_critical_override_active') == 'off'
+                }}
+
+      # ── START EXPORT: export enabled, Remote EMS currently off ───
+      - conditions:
+          - condition: time
+            after: "17:59:50"
+            before: "20:00:00"   # ← ADJUST to your peak export window
+          - condition: state
+            entity_id: input_boolean.battery_export_enabled
+            state: "on"
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+                state: "on"
+          - condition: state
+            entity_id: input_boolean.aemo_critical_override_active
+            state: "off"
+        sequence:
+          - action: persistent_notification.create
+            data:
+              notification_id: export_start
+              title: "✅ Starting Peak Export"
+              message: >-
+                Time: {{ now().strftime('%H:%M:%S') }}
+                Battery: {{ states('sensor.sigen_0_inverter_1_available_battery_discharge_energy') }} kWh
+                Export Rate: {{ states('input_number.battery_export_suggested_rate') }} kW
+                Min Rate (Zero Hero): {{ states('input_number.battery_minimum_export_rate_zero_hero') }} kW
+
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_on
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+          - wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') != 'unavailable' }}"  # ← REPLACE
+            timeout: "00:00:30"
+            continue_on_timeout: false
+
+          - action: number.set_value
+            data:
+              value: >-
+                {% set max_rate = states('input_number.battery_peak_export_maximum_rate') | float(5.0) %}
+                {% set suggested_rate = states('input_number.battery_export_suggested_rate') | float(0) %}
+                {% set min_rate = states('input_number.battery_minimum_export_rate_zero_hero') | float(0.5) %}
+                {% set soc_now = states('sensor.sigen_0_inverter_1_battery_soc') | float(0) %}  {# ← REPLACE #}
+                {% set soc_min = states('input_number.battery_minimum_soc_end_of_export') | float(40) %}
+                {% set minutes_remaining = ((20 - now().hour - now().minute / 60) * 60) | float(1) %}  {# ← ADJUST 20 to your peak end hour #}
+                {% set soc_headroom = [soc_now - soc_min, 0] | max %}
+                {% set battery_capacity_kwh = states('sensor.sigen_0_inverter_1_rated_battery_capacity') | float(32.0) %}  {# ← REPLACE sensor name if yours differs #}
+                {% set soc_limited_rate = (soc_headroom / 100 * battery_capacity_kwh) / (minutes_remaining / 60) if minutes_remaining > 0 else 0 %}
+                {% set soc_limited_rate_rounded = (soc_limited_rate / 0.5) | round(0, 'floor') * 0.5 %}
+                {% set rate = [min_rate, suggested_rate] | max %}
+                {% set rate = [rate, soc_limited_rate_rounded] | min %}
+                {% if rate <= 0 %}
+                  {{ min_rate }}
+                {% else %}
+                  {{ [max_rate, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+          # ← REPLACE device_id, entity_id and option with your SIGEN select entity
+          - device_id: YOUR_SIGEN_DEVICE_ID
+            domain: select
+            entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
+            type: select_option
+            option: "Command Discharging (Output power from PV first)"
+
+      # ── ADJUST RATE: export enabled, Remote EMS already on ───────
+      - conditions:
+          - condition: time
+            after: "17:59:50"
+            before: "20:00:00"   # ← ADJUST to your peak export window
+          - condition: state
+            entity_id: input_boolean.battery_export_enabled
+            state: "on"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.aemo_critical_override_active
+            state: "off"
+        sequence:
+          - action: number.set_value
+            data:
+              value: >-
+                {% set max_rate = states('input_number.battery_peak_export_maximum_rate') | float(5.0) %}
+                {% set suggested_rate = states('input_number.battery_export_suggested_rate') | float(0) %}
+                {% set min_rate = states('input_number.battery_minimum_export_rate_zero_hero') | float(0.5) %}
+                {% set soc_now = states('sensor.sigen_0_inverter_1_battery_soc') | float(0) %}  {# ← REPLACE #}
+                {% set soc_min = states('input_number.battery_minimum_soc_end_of_export') | float(40) %}
+                {% set minutes_remaining = ((20 - now().hour - now().minute / 60) * 60) | float(1) %}  {# ← ADJUST 20 to your peak end hour #}
+                {% set soc_headroom = [soc_now - soc_min, 0] | max %}
+                {% set battery_capacity_kwh = states('sensor.sigen_0_inverter_1_rated_battery_capacity') | float(32.0) %}  {# ← REPLACE sensor name if yours differs #}
+                {% set soc_limited_rate = (soc_headroom / 100 * battery_capacity_kwh) / (minutes_remaining / 60) if minutes_remaining > 0 else 0 %}
+                {% set soc_limited_rate_rounded = (soc_limited_rate / 0.5) | round(0, 'floor') * 0.5 %}
+                {% set rate = [min_rate, suggested_rate] | max %}
+                {% set rate = [rate, soc_limited_rate_rounded] | min %}
+                {% if rate <= 0 %}
+                  {{ min_rate }}
+                {% else %}
+                  {{ [max_rate, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+      # ── STOP EXPORT: export disabled but Remote EMS still on ─────
+      - conditions:
+          - condition: time
+            after: "17:59:50"
+            before: "20:00:00"   # ← ADJUST to your peak export window
+          - condition: state
+            entity_id: input_boolean.battery_export_enabled
+            state: "off"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.aemo_critical_override_active
+            state: "off"
+        sequence:
+          - action: persistent_notification.create
+            data:
+              notification_id: export_disabled
+              title: "⚠️ Export Disabled During Peak Period"
+              message: >-
+                Export was disabled - turning off Remote EMS.
+                Reason: {{ states('input_text.battery_export_strategy') }}
+
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_off
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+          - delay: "00:00:05"
+
+          - action: number.set_value
+            data:
+              value: >-
+                {% set max_rate = states('input_number.battery_peak_export_maximum_rate') | float(5.0) %}
+                {% set suggested_rate = states('input_number.battery_export_suggested_rate') | float(0) %}
+                {% set min_rate = states('input_number.battery_minimum_export_rate_zero_hero') | float(0.5) %}
+                {% set soc_now = states('sensor.sigen_0_inverter_1_battery_soc') | float(0) %}  {# ← REPLACE #}
+                {% set soc_min = states('input_number.battery_minimum_soc_end_of_export') | float(40) %}
+                {% set minutes_remaining = ((20 - now().hour - now().minute / 60) * 60) | float(1) %}  {# ← ADJUST 20 to your peak end hour #}
+                {% set soc_headroom = [soc_now - soc_min, 0] | max %}
+                {% set battery_capacity_kwh = states('sensor.sigen_0_inverter_1_rated_battery_capacity') | float(32.0) %}  {# ← REPLACE sensor name if yours differs #}
+                {% set soc_limited_rate = (soc_headroom / 100 * battery_capacity_kwh) / (minutes_remaining / 60) if minutes_remaining > 0 else 0 %}
+                {% set soc_limited_rate_rounded = (soc_limited_rate / 0.5) | round(0, 'floor') * 0.5 %}
+                {% set rate = [min_rate, suggested_rate] | max %}
+                {% set rate = [rate, soc_limited_rate_rounded] | min %}
+                {% if rate <= 0 %}
+                  {{ min_rate }}
+                {% else %}
+                  {{ [max_rate, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+      # ── CLEANUP: outside peak window, Remote EMS still on ────────
+      # Does not act if AEMO override is active or if in Command Discharging
+      # (which is owned by the grid bias offset automation)
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST to your peak export window
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+                state: "off"
+          - condition: state
+            entity_id: input_boolean.aemo_critical_override_active
+            state: "off"
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: select.sigen_0_plant_remote_ems_control_mode  # ← REPLACE
+                state: "Command Discharging (Output power from PV first)"
+        sequence:
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_off
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+          - action: number.set_value
+            data:
+              value: >-
+                {% set max_rate = states('input_number.battery_peak_export_maximum_rate') | float(5.0) %}
+                {% set suggested_rate = states('input_number.battery_export_suggested_rate') | float(0) %}
+                {% set min_rate = states('input_number.battery_minimum_export_rate_zero_hero') | float(0.5) %}
+                {% set soc_now = states('sensor.sigen_0_inverter_1_battery_soc') | float(0) %}  {# ← REPLACE #}
+                {% set soc_min = states('input_number.battery_minimum_soc_end_of_export') | float(40) %}
+                {% set minutes_remaining = ((20 - now().hour - now().minute / 60) * 60) | float(1) %}  {# ← ADJUST 20 to your peak end hour #}
+                {% set soc_headroom = [soc_now - soc_min, 0] | max %}
+                {% set battery_capacity_kwh = states('sensor.sigen_0_inverter_1_rated_battery_capacity') | float(32.0) %}  {# ← REPLACE sensor name if yours differs #}
+                {% set soc_limited_rate = (soc_headroom / 100 * battery_capacity_kwh) / (minutes_remaining / 60) if minutes_remaining > 0 else 0 %}
+                {% set soc_limited_rate_rounded = (soc_limited_rate / 0.5) | round(0, 'floor') * 0.5 %}
+                {% set rate = [min_rate, suggested_rate] | max %}
+                {% set rate = [rate, soc_limited_rate_rounded] | min %}
+                {% if rate <= 0 %}
+                  {{ min_rate }}
+                {% else %}
+                  {{ [max_rate, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
