@@ -39,7 +39,7 @@ See the [Node-RED README](./node-red/) for prerequisites, installation instructi
 
 ### Supporting automation
 
-The Battery Export Calculator reads `input_boolean.aircon_expected_overnight` to adjust the overnight battery reserve. This flag is set by a separate automation that predicts overnight load based on weather forecasts and HVAC state. See the [ha-overnight-load-prediction](https://github.com/wattmatters/ha-overnight-load-prediction) repository for an example implementation — the same pattern can be adapted for EV charging, hot water, or any other significant overnight load.
+The Battery Export Calculator reads `input_boolean.aircon_expected_overnight` as a cross-check, but the primary connection to battery management is more direct: the overnight load prediction automation calculates and writes a dynamic SOC floor to `input_number.battery_minimum_soc_end_of_export` each afternoon, which the Peak Export Control automation uses to limit how aggressively the battery discharges during the peak window. See the [ha-overnight-load-prediction](https://github.com/wattmatters/ha-overnight-load-prediction) repository for the full implementation — the same pattern can be adapted for EV charging, hot water, or any other significant overnight load.
 
 ---
 
@@ -86,6 +86,7 @@ Several helpers are referenced across multiple automations. Create these once in
 | `input_boolean.grid_bias_offset_active` | Toggle | Grid Bias Offset |
 | `input_boolean.managed_period_active` | Toggle | Grid Bias Offset |
 | `input_boolean.aircon_expected_overnight` | Toggle | Export Calculator (NR) ← set by overnight load prediction automation |
+| `input_number.overnight_soc_boost` | Number | Overnight load prediction — manual top-up (0–30%, default 0%) |
 | `sensor.ewma_grid_active_power` | Filter helper | Grid Bias Offset — see that automation's README for setup |
 
 See each automation's individual README for the full list of helpers it requires and how they are used.
