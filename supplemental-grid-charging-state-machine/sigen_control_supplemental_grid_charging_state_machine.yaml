@@ -1,0 +1,177 @@
+alias: "SIGEN - CONTROL SUPPLEMENTAL GRID CHARGING (State Machine)"
+description: >-
+  State-machine-gated version of the supplemental grid charging automation.
+  Only acts when input_select.battery_control_owner equals
+  'supplemental_charging'. Two branches: ACTIVE (grid charging required,
+  Command Charging mode) and SELF-CONSUMPTION (charging not required,
+  battery charges from solar only, Remote EMS released). Shared as an
+  example — see the repository README for the state machine architecture
+  this depends on.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs with your own.
+#
+# REQUIRES: input_select.battery_control_owner (see the
+# Battery Control Ownership State Machine automation in this repo)
+#
+# Design notes (read before adapting):
+#   - The ownership gate condition replaces the original design's
+#     separate "outside free period — turn off Remote EMS" cleanup
+#     branch entirely. With the gate, this automation simply never acts
+#     outside its slot, so there is nothing to clean up reactively.
+#   - Every branch unconditionally force-sets THREE things on entry,
+#     regardless of its own primary purpose, following a "baseline
+#     reset" principle applied consistently across all state-machine-
+#     gated automations in this collection:
+#       1. Its own switch/mode (state-guarded — only changed if not
+#          already correct)
+#       2. The grid export limit, reset to maximum every cycle — this
+#          guards against a stale low value left by a previous owner
+#          (e.g. peak export or an AEMO override) capping genuine
+#          excess solar later in this window if the battery fills
+#          before the window ends
+#       3. The charging limit, reset to the LIVE rated-charging-power
+#          sensor (not a hardcoded literal) — since none of the
+#          charging/export/bias-offset automations exclusively own this
+#          number, any of them could leave it stranded for the next
+#          owner otherwise
+#   - The ACTIVE branch requires the charging-required boolean to have
+#     been sustained for 2 minutes before acting, to avoid flapping on
+#     a noisy or rapidly-changing suggested-charging signal.
+#
+# ─────────────────────────────────────────────────────────────────
+
+triggers:
+  - trigger: state
+    entity_id: input_select.battery_control_owner
+    id: owner_changed
+
+  - trigger: time_pattern
+    minutes: "/1"
+    id: poll
+
+  - trigger: state
+    entity_id: input_boolean.battery_supplemental_charging_required
+    for:
+      minutes: 2
+    id: charging_required_changed
+
+conditions:
+  - condition: state
+    entity_id: input_select.battery_control_owner
+    state: supplemental_charging
+    alias: "Ownership gate: only act if the state machine says it is supplemental charging's turn"
+
+actions:
+  - choose:
+      - alias: "ACTIVE: grid charging required (sustained 2 min)"
+        conditions:
+          - condition: state
+            entity_id: input_boolean.battery_supplemental_charging_required
+            state: "on"
+            for:
+              minutes: 2
+        sequence:
+          - if:
+              - condition: state
+                entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+                state: "off"
+            then:
+              - action: switch.turn_on
+                alias: Enable Remote EMS Mode
+                target:
+                  entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+              - alias: "Settle wait — coupled directly to the switch-on transition above, do not separate these"
+                wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') != 'unavailable' }}"   # ← REPLACE
+                timeout: "00:00:30"
+                continue_on_timeout: false
+          - if:
+              - condition: not
+                conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ states('select.sigen_0_plant_remote_ems_control_mode') ==
+                         'Command Charging (Consume power from the PV first)' }}   # ← REPLACE
+            then:
+              - action: select.select_option
+                alias: Command Charging - Consume power from PV first
+                data:
+                  option: "Command Charging (Consume power from the PV first)"
+                target:
+                  entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Baseline reset: Grid Export Limit to maximum — guards against
+              a stale low value left by a previous owner capping genuine
+              excess solar later in this window
+            data:
+              value: 5   # ← REPLACE with your maximum export limit in kW
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Set Charge Rate (minimum floor during free period, capped at
+              live rated charging power, not a hardcoded literal)
+            data:
+              value: >-
+                {% set rate = states('input_number.battery_charge_suggested_rate') | float(0) %}
+                {% set rated_max = states('sensor.sigen_0_inverter_1_rated_charging_power') | float(16.8) %}
+                {# ← REPLACE sensor name if yours differs #}
+                {% if rate <= 0 %}
+                  2.0
+                {% else %}
+                  {{ [rated_max, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_max_charging_limit   # ← REPLACE
+
+      - alias: >-
+          SELF-CONSUMPTION: grid charging not required (sustained 2 min) —
+          battery charges from solar only, Remote EMS released
+        conditions:
+          - condition: state
+            entity_id: input_boolean.battery_supplemental_charging_required
+            state: "off"
+            for:
+              minutes: 2
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+                    state: "off"
+            then:
+              - action: select.select_option
+                alias: Self-Consumption Mode (Solar charges battery naturally)
+                data:
+                  option: "Maximum Self-consumption (Default)"
+                target:
+                  entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID   # ← REPLACE
+              - action: switch.turn_off
+                alias: Disable Remote EMS (not needed for self-consumption mode)
+                target:
+                  entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Baseline reset: Grid Export Limit to maximum — allows genuine
+              excess solar to export uncapped if battery fills before the
+              window ends
+            data:
+              value: 5   # ← REPLACE with your maximum export limit in kW
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Baseline reset: Charge Rate to live rated maximum (allow full
+              solar charging)
+            data:
+              value: "{{ states('sensor.sigen_0_inverter_1_rated_charging_power') | float(16.8) }}"   # ← REPLACE
+            target:
+              entity_id: number.sigen_0_plant_max_charging_limit   # ← REPLACE
+
+initial_state: true
+mode: single
