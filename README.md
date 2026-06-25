@@ -2,7 +2,7 @@
 
 A collection of Home Assistant automations for **Sigenergy energy controller owners** in the Australian NEM, shared as examples for adaptation to your own system.
 
-These automations were developed and tested on a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, running **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with the [sigenergy2mqtt](https://github.com/seud0nym/home-assistant-addons/tree/main/sigenergy2mqtt) add-on integration.
+These automations were developed and tested on a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, running **Home Assistant OS 17.3 / Core 2026.6.3 / Supervisor 2026.6.21 with the [sigenergy2mqtt](https://github.com/seud0nym/home-assistant-addons/tree/main/sigenergy2mqtt) add-on integration.
 
 > **Important:** These are not plug-and-play solutions. They are posted as working examples to help others understand the approach and adapt it to their own system, tariff, and configuration. You will need to update entity IDs, time windows, thresholds, and helper references to suit your setup.
 
