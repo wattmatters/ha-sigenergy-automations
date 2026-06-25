@@ -6,6 +6,15 @@ This is posted as a reference to adapt to your own system — not a plug-and-pla
 
 ---
 
+## What it does
+
+Gated on `battery_control_owner == 'supplemental_charging'`:
+
+- **ACTIVE** — grid charging required (sustained 2 minutes to avoid flapping on a noisy signal): enables Remote EMS, sets Command Charging mode, sets a charge rate based on the suggested rate with a minimum floor
+- **SELF-CONSUMPTION** — grid charging not required (sustained 2 minutes): returns to Maximum Self-consumption, releases Remote EMS, and resets both the export and charging limits to maximum so genuine excess solar isn't capped
+
+---
+
 ## What changed from the original
 
 This is largely a structural refactor rather than a behaviour change — the charging decision logic itself is unchanged.
@@ -16,7 +25,7 @@ The original automation had a third branch: "outside free period — turn off Re
 
 ### Baseline reset principle
 
-Both remaining branches (ACTIVE and SELF-CONSUMPTION) now unconditionally force-set three things on every cycle, following the cross-automation baseline-reset principle described in the [state machine README](../battery-control-state-machine/):
+Both branches above (ACTIVE and SELF-CONSUMPTION) unconditionally force-set three things on every cycle, following the cross-automation baseline-reset principle described in the [state machine README](../battery-control-state-machine/):
 
 1. Its own switch/mode (state-guarded — only changed if not already correct)
 2. **The grid export limit, reset to maximum every cycle** — this closes a real gap identified during the design review: if solar alone fills the battery before the window ends under the self-consumption branch, the export limit must not be left at a stale low value from a previous owner (e.g. peak export or an AEMO override). Genuine excess PV could otherwise be wrongly capped during a period where operational correctness still matters even though the feed-in tariff itself is near zero
@@ -25,15 +34,6 @@ Both remaining branches (ACTIVE and SELF-CONSUMPTION) now unconditionally force-
 ### Hardcoded value replaced with live sensor
 
 The original's charge-rate formula used a hardcoded `16.5 kW` as its upper bound. This version reads `sensor.sigen_0_inverter_1_rated_charging_power` live (with a fallback), matching the true rated maximum rather than a value that may drift out of date if the inverter firmware or configuration changes.
-
----
-
-## What it does
-
-Gated on `battery_control_owner == 'supplemental_charging'`:
-
-- **ACTIVE** — grid charging required (sustained 2 minutes to avoid flapping on a noisy signal): enables Remote EMS, sets Command Charging mode, sets a charge rate based on the suggested rate with a minimum floor
-- **SELF-CONSUMPTION** — grid charging not required (sustained 2 minutes): returns to Maximum Self-consumption, releases Remote EMS, and resets both the export and charging limits to maximum so genuine excess solar isn't capped
 
 ---
 
