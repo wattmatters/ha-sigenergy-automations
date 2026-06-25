@@ -6,6 +6,25 @@ This is posted as a reference to adapt to your own system — not a plug-and-pla
 
 ---
 
+## What it does
+
+Gated on `battery_control_owner == 'bias_offset'`, runs a single decision pass each cycle:
+
+| Branch | Condition | Action |
+|---|---|---|
+| RELEASE (solar excess) | Solar excess forecast on AND SoC near-full | Release to self-consumption |
+| RELEASE (DC charging) | EV DC charger actively charging | Release — let EV see real excess solar |
+| RELEASE (EV cooldown) | Cooldown timer active | Release — let sensors settle |
+| ACTIVE (full battery) | SoC near-full, daylight hours, sustained low export per EWMA | Enable bias offset export |
+| ACTIVE (simple) | SoC below near-full threshold, any time | Enable bias offset export |
+| Default | None of the above matched | No-op (baseline reset only) |
+
+See [What is metering bias?](../archive/grid-bias-offset-export/#what-it-does) in the original automation's README for an explanation of the underlying problem this solves.
+
+> **Note on the default branch:** it deliberately takes no switch action — see [Post-cutover fix: removed default-branch oscillation](#post-cutover-fix-removed-default-branch-oscillation) below before adding one.
+
+---
+
 ## What changed from the original
 
 ### Three-way split replaced with a single pass
@@ -31,23 +50,6 @@ A genuine bug fix folded into the cutover: the solar-excess RELEASE branch now a
 The fix: the default branch is now a true no-op (baseline charge-limit reset only, no switch action). The three RELEASE branches are unaffected and still release normally on their own non-EWMA signals (solar excess, DC charging, EV cooldown) — only the bare "nothing else matched" fallback stopped touching hardware.
 
 **If you adapt this automation and find yourself wanting to add a switch action to the default branch, stop and check whether what you're seeing is a genuine new state or just this same threshold-flicker pattern.**
-
----
-
-## What it does
-
-Gated on `battery_control_owner == 'bias_offset'`, runs a single decision pass each cycle:
-
-| Branch | Condition | Action |
-|---|---|---|
-| RELEASE (solar excess) | Solar excess forecast on AND SoC near-full | Release to self-consumption |
-| RELEASE (DC charging) | EV DC charger actively charging | Release — let EV see real excess solar |
-| RELEASE (EV cooldown) | Cooldown timer active | Release — let sensors settle |
-| ACTIVE (full battery) | SoC near-full, daylight hours, sustained low export per EWMA | Enable bias offset export |
-| ACTIVE (simple) | SoC below near-full threshold, any time | Enable bias offset export |
-| Default | None of the above matched | No-op (baseline reset only) |
-
-See [What is metering bias?](../archive/grid-bias-offset-export/#what-it-does) in the original automation's README for an explanation of the underlying problem this solves.
 
 ---
 
