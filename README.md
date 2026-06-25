@@ -14,15 +14,22 @@ These automations were developed with assistance from [Claude](https://claude.ai
 
 ---
 
-## Automations
+## Architecture
+
+As of June 2026, three of these automations are coordinated by a **battery control ownership state machine** — a single arbitrator that decides whose turn it is to control Remote EMS, eliminating a class of handover bugs that came from each automation independently inferring ownership from secondhand signals. See the [state machine README](./battery-control-state-machine/) for the full architecture and rationale.
 
 | Automation | Description |
 |---|---|
-| [AEMO Critical Event Export Control](./aemo-critical-event-export/) | Maximises battery export during AEMO critical price events |
-| [Peak Export Control](./peak-export-control/) | Manages battery export during the evening peak feed-in bonus period, with Zero Hero protection |
-| [Supplemental Grid Charging](./supplemental-grid-charging/) | Manages battery charging during a cheap or free electricity rate period |
-| [EV DC Charger Stop Cooldown Timer](./ev-dc-charger-cooldown/) | Starts a cooldown timer when DC charging stops, preventing other automations from acting before load sensors settle |
-| [Grid Bias Offset Export](./grid-bias-offset-export/) | Applies a small persistent export offset to eliminate metering bias imports the inverter cannot detect |
+| [AEMO Critical Event Export Control](./aemo-critical-event-export/) | Maximises battery export during AEMO critical price events. *Operates independently — does not read the state machine.* |
+| [Battery Control Ownership State Machine](./battery-control-state-machine/) | Arbitrates which automation currently controls Remote EMS |
+| [Peak Export Control (State Machine)](./peak-export-control-state-machine/) | Manages battery export during the evening peak feed-in bonus period, with Zero Hero protection |
+| [Supplemental Grid Charging (State Machine)](./supplemental-grid-charging-state-machine/) | Manages battery charging during a cheap or free electricity rate period |
+| [Grid Bias Offset Export (State Machine)](./grid-bias-offset-export-state-machine/) | Applies a small persistent export offset to eliminate metering bias imports the inverter cannot detect |
+| [EV DC Charger Stop Cooldown Timer](./ev-dc-charger-cooldown/) | Starts a cooldown timer when DC charging stops, preventing the bias offset automation from acting before load sensors settle. *Unchanged by the state machine project.* |
+
+### Archived automations
+
+The original (pre-state-machine) versions of Peak Export, Supplemental Charging, and Bias Offset are kept in [`./archive/`](./archive/) for reference. See that folder's README for why they were superseded and when you might still prefer the simpler originals.
 
 ---
 
@@ -64,8 +71,9 @@ Several helpers are referenced across multiple automations. Create these once in
 
 | Entity | Type | Used by |
 |---|---|---|
-| `input_boolean.battery_export_enabled` | Toggle | Peak Export, AEMO Critical, Export Calculator (NR) |
-| `input_boolean.aemo_critical_override_active` | Toggle | AEMO Critical, Peak Export |
+| `input_boolean.battery_export_enabled` | Toggle | AEMO Critical, Export Calculator (NR) — *no longer read by Peak Export (State Machine), see that automation's README* |
+| `input_select.battery_control_owner` | Select | Arbitrated by the state machine; read by Peak Export, Supplemental Charging, and Bias Offset (all State Machine versions) |
+| `input_boolean.aemo_critical_override_active` | Toggle | AEMO Critical, Battery Control Ownership State Machine |
 | `input_boolean.aemo_pre_alert` | Toggle | AEMO Critical |
 | `input_boolean.aemo_critical_event` | Toggle | AEMO Critical |
 | `input_number.aemo_critical_threshold` | Number | AEMO Critical |
@@ -88,6 +96,7 @@ Several helpers are referenced across multiple automations. Create these once in
 | `input_boolean.aircon_expected_overnight` | Toggle | Export Calculator (NR) ← set by overnight load prediction automation |
 | `input_number.overnight_soc_boost` | Number | Overnight load prediction — manual top-up (0–30%, default 0%) |
 | `sensor.ewma_grid_active_power` | Filter helper | Grid Bias Offset — see that automation's README for setup |
+| `binary_sensor.solar_excess_available` | Template helper | Grid Bias Offset (State Machine) — see that automation's README for setup |
 
 See each automation's individual README for the full list of helpers it requires and how they are used.
 
@@ -95,16 +104,37 @@ See each automation's individual README for the full list of helpers it requires
 
 ## How everything fits together
 
-The Node-RED flows and HA automations are designed to work as a layered system without conflicting:
+```
+Node-RED flows (every 60s)
+  └── write strategy decisions to helper entities
+       (suggested rates, charging-required boolean, etc.)
 
-- **Node-RED flows** run every minute and write strategy decisions to helper entities — they decide *whether* and *how much* to charge or export
-- **AEMO Critical Event** takes priority over everything — when active, it sets `input_boolean.aemo_critical_override_active` to `on`, which suppresses Peak Export and other automations
-- **Peak Export** manages the evening export window, reads the suggested rate from the Export Calculator, and respects the AEMO override flag
-- **Supplemental Grid Charging** manages the cheap-rate charging window, reads the suggested rate from the Charging Calculator, and respects the AEMO override flag
-- **EV DC Charger Cooldown** and **Grid Bias Offset** operate outside managed windows and both respect the AEMO override flag
-- **Overnight Load Prediction** (separate repo) runs each afternoon and sets the aircon flag consumed by the Export Calculator
+Battery Control Ownership State Machine (every 60s)
+  └── arbitrates and writes input_select.battery_control_owner
+       Priority: aemo_override > supplemental_charging > peak_export > bias_offset
 
-Each automation's README describes its specific interaction points with the others.
+Three gated consumer automations (every 60s + relevant state changes)
+  ├── Peak Export Control (State Machine)        — acts only if owner == peak_export
+  ├── Supplemental Grid Charging (State Machine)  — acts only if owner == supplemental_charging
+  └── Grid Bias Offset Export (State Machine)     — acts only if owner == bias_offset
+
+Independent automations (not gated by the state machine)
+  ├── AEMO Critical Event Export Control  — sets the override flag the state machine reads
+  └── EV DC Charger Stop Cooldown Timer   — its timer is read by Bias Offset as a RELEASE signal
+
+Supporting automation (separate repo)
+  └── Overnight Load Prediction — sets battery_minimum_soc_end_of_export and
+       aircon_expected_overnight, consumed by Peak Export and the Export Calculator
+```
+
+- **Node-RED flows** decide *whether* and *how much* to charge or export — they write suggested rates and requirement booleans to helpers, but never touch hardware directly
+- **The state machine** decides *whose turn it is* — it writes `battery_control_owner` and never touches hardware either
+- **The three gated consumer automations** are the only things that actually flip the Remote EMS switch, change the operating mode, or set export/charging limits — and each one gates on the state machine's verdict as its first condition
+- **AEMO Critical Event** takes top priority by setting `aemo_critical_override_active`, which the state machine reads and reflects as the highest-priority owner
+- **EV DC Charger Cooldown** is a small standalone timer-starter; its output feeds into Bias Offset's own release logic, not into the state machine directly
+- **Overnight Load Prediction** (separate repo) feeds the Peak Export rate formula's reserve floor, independent of the state machine
+
+Each automation's README describes its specific interaction points with the others in more detail.
 
 ---
 
