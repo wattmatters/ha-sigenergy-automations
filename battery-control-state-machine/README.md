@@ -22,37 +22,39 @@ The state machine fixes this by introducing exactly one thing that decides owner
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Battery Control Ownership State Machine (this folder)  │
-│                                                           │
-│  Runs every minute + on AEMO override change.            │
-│  Writes input_select.battery_control_owner ONLY.         │
-│  Never touches Remote EMS, mode select, or limits.        │
-│                                                           │
-│  Priority (highest first):                                │
-│    1. aemo_override         (AEMO critical event active) │
-│    2. supplemental_charging (cheap/free rate window)      │
-│    3. peak_export           (peak feed-in window)         │
-│    4. bias_offset           (everything else - default)   │
-│    5. none                  (safety-net, unreachable)      │
-└───────────────────────────┬───────────────────────────────┘
-                            │ input_select.battery_control_owner
-                            ▼
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-┌───────────────┐  ┌─────────────────┐  ┌────────────────┐
-│ Peak Export   │  │ Supplemental    │  │ Bias Offset    │
-│ Control       │  │ Grid Charging   │  │ Export         │
-│ (State        │  │ (State          │  │ (State         │
-│  Machine)     │  │  Machine)       │  │  Machine)      │
-│               │  │                 │  │                │
-│ Gate: owner   │  │ Gate: owner ==  │  │ Gate: owner == │
-│ == 'peak_     │  │ 'supplemental_  │  │ 'bias_offset'  │
-│  export'      │  │  charging'      │  │                │
-└───────────────┘  └─────────────────┘  └────────────────┘
++------------------------------------------------------------+
+| Battery Control Ownership State Machine (this folder)      |
+|                                                              |
+| Runs every minute + on AEMO override change.                |
+| Writes input_select.battery_control_owner ONLY.             |
+| Never touches Remote EMS, mode select, or limits.           |
+|                                                              |
+| Priority (highest first):                                   |
+|   1. aemo_override          (AEMO critical event active)    |
+|   2. supplemental_charging  (cheap/free rate window)         |
+|   3. peak_export            (peak feed-in window)            |
+|   4. bias_offset            (everything else - default)      |
+|   5. none                   (safety-net, unreachable)        |
++------------------------------------------------------------+
+                             |
+                             | input_select.battery_control_owner
+                             v
+            +----------------+----------------+
+            |                |                |
+            v                v                v
++----------------+  +----------------+  +----------------+
+| Peak Export    |  | Supplemental   |  | Bias Offset    |
+| Control        |  | Grid Charging  |  | Export         |
+| (State         |  | (State         |  | (State         |
+|  Machine)      |  |  Machine)      |  |  Machine)      |
+|                |  |                |  |                |
+| Gate: owner    |  | Gate: owner == |  | Gate: owner == |
+| == 'peak_      |  | 'supplemental_ |  | 'bias_offset'  |
+|  export'       |  |  charging'     |  |                |
++----------------+  +----------------+  +----------------+
 
 (AEMO Critical Event Export Control operates independently and
- does not read battery_control_owner — see note below)
+ does not read battery_control_owner -- see note below)
 ```
 
 Each consumer automation's **first condition, on every trigger**, is the ownership gate: if `battery_control_owner` doesn't match its name, it does nothing at all — not even a baseline reset. This means:
