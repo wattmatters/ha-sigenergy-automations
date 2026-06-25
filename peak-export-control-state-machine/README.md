@@ -6,6 +6,18 @@ This is posted as a reference to adapt to your own system — not a plug-and-pla
 
 ---
 
+## What it does
+
+Gated on `battery_control_owner == 'peak_export'`:
+
+- **RELEASE** — battery SoC at or below the protective floor: returns to Maximum Self-consumption mode and disables Remote EMS
+- **ACTIVE** — battery SoC above the protective floor: enables Remote EMS, sets Command Discharging mode, and calculates an adaptive export rate every minute
+- **Default** (SoC exactly at boundary, or sensor unavailable): releases safely rather than leaving stale state
+
+Both ACTIVE and RELEASE force-reset the charging limit to the live rated charging power sensor on every cycle — peak export never uses charging, but must not strand that number for whichever automation takes over next (see the [state machine README](../battery-control-state-machine/)'s "baseline reset" principle).
+
+---
+
 ## What changed from the original
 
 This is not a pure refactor — it includes a deliberate behaviour change found during the redesign review.
@@ -33,18 +45,6 @@ Overnight-reserve protection now flows entirely through the Zero-Hero rate formu
 - The original's separate "switch ON" and "adjust while exporting" branches are collapsed into one state-guarded ACTIVE branch
 - The time-window-based "outside period" cleanup branch is removed entirely — it's structurally unreachable once gated on `battery_control_owner`, which only equals `peak_export` during the configured window per the arbitrator's own logic. This makes a stale rate calculation past the end of the window unreachable *by construction*, rather than relying on a separate cleanup branch racing against the window boundary (a real bug class in the original design)
 - The 6 PM debug persistent-notification branch is omitted — that was a diagnostic aid for the old time-window-guessing logic and has no equivalent need once ownership is explicit
-
----
-
-## What it does
-
-Gated on `battery_control_owner == 'peak_export'`:
-
-- **RELEASE** — battery SoC at or below the protective floor: returns to Maximum Self-consumption mode and disables Remote EMS
-- **ACTIVE** — battery SoC above the protective floor: enables Remote EMS, sets Command Discharging mode, and calculates an adaptive export rate every minute
-- **Default** (SoC exactly at boundary, or sensor unavailable): releases safely rather than leaving stale state
-
-Both ACTIVE and RELEASE force-reset the charging limit to the live rated charging power sensor on every cycle — peak export never uses charging, but must not strand that number for whichever automation takes over next (see the [state machine README](../battery-control-state-machine/)'s "baseline reset" principle).
 
 ---
 
