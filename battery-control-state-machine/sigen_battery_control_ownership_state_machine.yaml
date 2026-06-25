@@ -1,0 +1,116 @@
+alias: "SIGEN - BATTERY CONTROL OWNERSHIP STATE MACHINE"
+description: >-
+  Single source of truth for which automation currently has (or should have)
+  the right to control Remote EMS. Pure arbitration: writes
+  input_select.battery_control_owner only, never touches the Remote EMS
+  switch, the mode select, or any export/charging limit directly. This
+  automation makes no hardware changes — it only decides and records whose
+  turn it is. Shared as an example — adapt time windows and entity IDs to
+  your own system.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs with your own.
+#
+# Before using this automation, create the input_select helper:
+#   input_select.battery_control_owner
+#   Options: none, aemo_override, supplemental_charging, peak_export, bias_offset
+#
+# Priority order (highest first) — each branch should mirror the EXACT
+# live signal the real consumer automation itself uses, not a re-derived
+# approximation. If you add a new consumer automation, add its claim
+# here ABOVE bias_offset (which is the default/fallback for "everything
+# else") and review the priority ordering carefully.
+#
+# Key values to adjust:
+#   - Time windows (supplemental_charging, peak_export)
+#   - AEMO override entity (if you use the AEMO Critical Event automation)
+#
+# ─────────────────────────────────────────────────────────────────
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/1"
+    id: poll
+
+  - trigger: state
+    entity_id: input_boolean.aemo_critical_override_active   # ← REPLACE if you don't use the AEMO automation
+    id: aemo_change
+
+conditions: []
+
+actions:
+  - choose:
+      # Priority 1: AEMO critical event override — takes precedence over everything
+      - conditions:
+          - condition: state
+            entity_id: input_boolean.aemo_critical_override_active   # ← REPLACE
+            state: "on"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.battery_control_owner
+            data:
+              option: aemo_override
+
+      # Priority 2: Supplemental grid charging window
+      - conditions:
+          - condition: time
+            after: "11:00:00"   # ← ADJUST to your cheap/free rate window
+            before: "14:00:00"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.battery_control_owner
+            data:
+              option: supplemental_charging
+
+      # Priority 3: Peak export window
+      - conditions:
+          - condition: time
+            after: "17:59:50"   # ← ADJUST to your peak export window (matches the
+            before: "20:00:00"  #   consumer automation's own lead-in window exactly)
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.battery_control_owner
+            data:
+              option: peak_export
+
+      # Priority 4: Bias offset — default/fallback for all other times.
+      # The bias offset automation's own internal conditions (SoC branch,
+      # solar-excess branch, DC-charger/cooldown exclusions) decide whether
+      # it actually acts — but architecturally it owns every time slot not
+      # explicitly claimed above.
+      - conditions:
+          - condition: not
+            conditions:
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"
+          - condition: not
+            conditions:
+              - condition: time
+                after: "17:59:50"
+                before: "20:00:00"
+        sequence:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.battery_control_owner
+            data:
+              option: bias_offset
+
+  # Safety-net default — expected to be unreachable given bias_offset's
+  # everything-else scope above. Deliberately not collapsed into bias_offset
+  # so a future change that narrows its scope doesn't silently fall through
+  # to nothing being recorded.
+  default:
+    - action: input_select.select_option
+      target:
+        entity_id: input_select.battery_control_owner
+      data:
+        option: none
+
+mode: single
