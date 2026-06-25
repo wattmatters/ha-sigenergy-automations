@@ -1,0 +1,232 @@
+alias: "SIGEN - CONTROL PEAK EXPORT TO GRID (State Machine)"
+description: >-
+  State-machine-gated version of the peak export automation. Only acts when
+  input_select.battery_control_owner equals 'peak_export'. Exports at an
+  adaptive Zero-Hero-protected rate whenever battery SoC is above a
+  protective floor, releasing to self-consumption only when SoC drops to
+  that floor — replacing the previous design's reliance on a Node-RED
+  boolean that could go false for unrelated planning-phase reasons. Shared
+  as an example — see the repository README for the state machine
+  architecture this depends on.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs and device_id values with your own.
+#
+# REQUIRES: input_select.battery_control_owner (see the
+# Battery Control Ownership State Machine automation in this repo)
+#
+# Design notes (read before adapting):
+#   - This automation no longer reads input_boolean.battery_export_enabled.
+#     That boolean (set by the Battery Export Calculator Node-RED flow)
+#     can go false for two unrelated reasons: (1) genuine battery
+#     protection at a low-SoC floor, and (2) an unrelated pre-window
+#     planning-phase projection that has nothing to do with battery
+#     protection and can flip rapidly with no debounce. Conflating the
+#     two could needlessly abandon your configured Zero-Hero minimum
+#     export rate during legitimate operation.
+#   - Instead, RELEASE fires only on a direct SoC check against the same
+#     floor your suggested-rate calculator uses for genuine battery
+#     protection (e.g. the Zero Hero minimum SoC in the Export Calculator
+#     flow). ACTIVE runs at any SoC above that floor.
+#   - There is no time-window-based "outside period" cleanup branch —
+#     this is structurally unreachable once gated on battery_control_owner,
+#     since that only equals 'peak_export' during the configured window
+#     per the state machine's own logic. This also means a stale rate
+#     calculation past the end of the window is unreachable by
+#     construction, rather than relying on a separate cleanup branch
+#     racing against the window boundary.
+#   - Both ACTIVE and RELEASE branches force-reset the charging limit to
+#     the live rated-power sensor on every cycle. Peak export never uses
+#     charging, but must not strand that number for whichever automation
+#     takes over next — see the repository README's "baseline reset"
+#     principle, applied consistently across all state-machine-gated
+#     automations in this collection.
+#
+# Key values to adjust:
+#   - Protective SoC floor (currently 25%) — should match whatever floor
+#     your export rate suggestion logic uses for genuine battery protection
+#   - Peak export window end hour (20, used in minutes-remaining calc)
+#   - battery_capacity_kwh fallback and sensor name
+#
+# ─────────────────────────────────────────────────────────────────
+
+triggers:
+  - trigger: state
+    entity_id: input_select.battery_control_owner
+    id: owner_changed
+
+  - trigger: time_pattern
+    minutes: "/1"
+    id: poll
+
+  - trigger: numeric_state
+    entity_id: sensor.sigen_0_inverter_1_battery_soc   # ← REPLACE
+    above: 25   # ← ADJUST to match your protective floor
+    id: soc_recovered
+    alias: "Battery SoC crosses above floor (recovery from low-SoC release)"
+
+  - trigger: numeric_state
+    entity_id: sensor.sigen_0_inverter_1_battery_soc   # ← REPLACE
+    below: 25.1   # ← ADJUST to match your protective floor + 0.1 buffer
+    id: soc_critical
+    alias: "Battery SoC crosses at/below floor (immediate protective release)"
+
+conditions:
+  - condition: state
+    entity_id: input_select.battery_control_owner
+    state: peak_export
+    alias: "Ownership gate: only act if the state machine says it is peak export's turn"
+
+actions:
+  - choose:
+      - alias: >-
+          RELEASE: battery SoC at or below the protective floor — genuine
+          battery protection, mirrors the same threshold your suggested-rate
+          calculator uses for protecting battery health
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_inverter_1_battery_soc   # ← REPLACE
+            below: 25.1   # ← ADJUST
+        sequence:
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+                    state: "off"
+            then:
+              - action: select.select_option
+                alias: Return to Maximum Self-consumption mode
+                data:
+                  option: "Maximum Self-consumption (Default)"
+                target:
+                  entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID   # ← REPLACE
+              - action: number.set_value
+                alias: Reset Grid Export Limit to Maximum
+                data:
+                  value: 5   # ← REPLACE with your maximum export limit in kW
+                target:
+                  entity_id: number.sigen_0_plant_grid_max_export_limit   # ← REPLACE
+              - delay: "00:00:02"
+              - action: switch.turn_off
+                alias: Disable Remote EMS Mode
+                target:
+                  entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Baseline reset: Charge Rate Limit to live rated maximum — peak
+              export never uses charging, but must not strand this number
+              for the next owner
+            data:
+              value: "{{ states('sensor.sigen_0_inverter_1_rated_charging_power') | float(16.8) }}"   # ← REPLACE
+            target:
+              entity_id: number.sigen_0_plant_max_charging_limit   # ← REPLACE
+
+      - alias: >-
+          ACTIVE: SoC above protective floor — export at Zero-Hero-protected
+          adaptive rate
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_inverter_1_battery_soc   # ← REPLACE
+            above: 25   # ← ADJUST
+        sequence:
+          - if:
+              - condition: state
+                entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+                state: "off"
+            then:
+              - action: switch.turn_on
+                alias: Enable Remote EMS Mode
+                target:
+                  entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+              - alias: "Settle wait — coupled directly to the switch-on transition above, do not separate these"
+                wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') != 'unavailable' }}"   # ← REPLACE
+                timeout: "00:00:30"
+                continue_on_timeout: false
+          - if:
+              - condition: not
+                conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ states('select.sigen_0_plant_remote_ems_control_mode') ==
+                         'Command Discharging (Output power from PV first)' }}   # ← REPLACE
+            then:
+              - action: select.select_option
+                alias: Command Discharging - Output Power from PV First
+                data:
+                  option: "Command Discharging (Output power from PV first)"
+                target:
+                  entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Set Grid Export Limit via Zero-Hero adaptive formula (SoC
+              headroom / minutes remaining, floored at Zero Hero minimum,
+              capped at configured max)
+            data:
+              value: >-
+                {% set max_rate = states('input_number.battery_peak_export_maximum_rate') | float(5.0) %}
+                {% set suggested_rate = states('input_number.battery_export_suggested_rate') | float(0) %}
+                {% set min_rate = states('input_number.battery_minimum_export_rate_zero_hero') | float(0.5) %}
+                {% set soc_now = states('sensor.sigen_0_inverter_1_battery_soc') | float(0) %}
+                {% set soc_min = states('input_number.battery_minimum_soc_end_of_export') | float(40) %}
+                {% set minutes_remaining = ((20 - now().hour - now().minute / 60) * 60) | float(1) %}
+                {# ← ADJUST the literal 20 above to your peak export window end hour #}
+                {% set soc_headroom = [soc_now - soc_min, 0] | max %}
+                {% set battery_capacity_kwh = states('sensor.sigen_0_inverter_1_rated_battery_capacity') | float(32.0) %}
+                {# ← REPLACE sensor name if yours differs #}
+                {% set soc_limited_rate = (soc_headroom / 100 * battery_capacity_kwh) / (minutes_remaining / 60) if minutes_remaining > 0 else 0 %}
+                {% set soc_limited_rate_rounded = (soc_limited_rate / 0.5) | round(0, 'floor') * 0.5 %}
+                {% set rate = [min_rate, suggested_rate] | max %}
+                {% set rate = [rate, soc_limited_rate_rounded] | min %}
+                {% if rate <= 0 %}
+                  {{ min_rate }}
+                {% else %}
+                  {{ [max_rate, (rate / 0.5) | round(0, 'ceil') * 0.5] | min }}
+                {% endif %}
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit   # ← REPLACE
+          - action: number.set_value
+            alias: >-
+              Baseline reset: Charge Rate Limit to live rated maximum — peak
+              export never uses charging, but must not strand this number
+              for the next owner
+            data:
+              value: "{{ states('sensor.sigen_0_inverter_1_rated_charging_power') | float(16.8) }}"   # ← REPLACE
+            target:
+              entity_id: number.sigen_0_plant_max_charging_limit   # ← REPLACE
+
+  default:
+    - alias: "SoC exactly at boundary or sensor unavailable — release safely rather than leaving stale state"
+      if:
+        - condition: not
+          conditions:
+            - condition: state
+              entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+              state: "off"
+      then:
+        - action: select.select_option
+          data:
+            option: "Maximum Self-consumption (Default)"
+          target:
+            entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID   # ← REPLACE
+        - action: number.set_value
+          data:
+            value: 5   # ← REPLACE with your maximum export limit in kW
+          target:
+            entity_id: number.sigen_0_plant_grid_max_export_limit   # ← REPLACE
+        - delay: "00:00:02"
+        - action: switch.turn_off
+          target:
+            entity_id: switch.sigen_0_plant_remote_ems   # ← REPLACE
+    - action: number.set_value
+      alias: "Baseline reset: Charge Rate Limit to live rated maximum"
+      data:
+        value: "{{ states('sensor.sigen_0_inverter_1_rated_charging_power') | float(16.8) }}"   # ← REPLACE
+      target:
+        entity_id: number.sigen_0_plant_max_charging_limit   # ← REPLACE
+
+initial_state: true
+mode: single
