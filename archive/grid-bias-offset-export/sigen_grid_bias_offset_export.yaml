@@ -1,0 +1,356 @@
+alias: "SIGEN - GRID BIAS OFFSET EXPORT (Overnight & Idle)"
+description: >-
+  Applies a small persistent export offset (e.g. 30 W) to eliminate metering
+  bias imports that the Sigenergy system cannot see. Activates when battery SoC
+  is below 99.5% (charging period), or when battery is full but filtered grid
+  power indicates sustained low export (afternoon fade). EV DC charging
+  suppresses activation across all branches regardless of SoC; a cooldown timer
+  after EV charging stops allows the low-pass filter to settle before
+  re-evaluating. Deactivates when battery SoC rises above 99.5%, DC charger
+  starts, or a managed period begins (cheap rate window, peak export window,
+  AEMO override). Shared as an example — adapt entity IDs, thresholds, and
+  time windows to your own system.
+
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — edit these to match your system
+# ─────────────────────────────────────────────────────────────────
+#
+# ← REPLACE all entity IDs and device_id values with your own.
+# Use Developer Tools → States to find the correct entity IDs.
+#
+# Prerequisites:
+#   1. An EWMA (or similar low-pass filter) sensor over your grid
+#      active power reading — see README for setup instructions.
+#   2. A timer helper for EV DC charger cooldown (shared with the
+#      EV DC Charger Stop Cooldown Timer automation).
+#   3. A boolean helper to flag when a managed period is active
+#      (cheap rate window, VPP schedule, etc.) — used as an
+#      additional exit condition beyond the hardcoded time windows.
+#
+# Key values to adjust:
+#   - Managed period time windows (after/before times)
+#   - Battery SoC threshold (currently 99.5%)
+#   - Export limit detection threshold (currently < 0.6 kW)
+#
+# ─────────────────────────────────────────────────────────────────
+
+mode: single
+
+trigger:
+  - platform: time_pattern
+    minutes: "/5"   # ← ADJUST: polling interval
+
+  - platform: template
+    value_template: >-
+      {{ states('sensor.ewma_grid_active_power') | float(0) >
+         -(states('input_number.grid_bias_offset_export_rate') | float(0) * 1000) }}
+    # Triggers when filtered grid power rises above the negative of the bias
+    # offset rate — i.e. sustained low export detected
+    # ← REPLACE sensor.ewma_grid_active_power with your filtered grid power sensor
+
+  - platform: state
+    entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+    to: "off"
+    # Triggers immediately when Remote EMS is turned off (handoff detection)
+
+  - platform: state
+    entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE if different
+    to: "idle"
+    # Triggers when EV cooldown timer expires — re-evaluates immediately
+
+condition:
+  - condition: state
+    entity_id: input_boolean.aemo_critical_override_active
+    state: "off"
+
+action:
+  - choose:
+
+      # ── DEACTIVATE: exit conditions met, we own Remote EMS ───────
+      - alias: "DEACTIVATE bias offset: conditions no longer met"
+        conditions:
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "on"
+          - condition: template
+            value_template: >-
+              {{ states('select.sigen_0_plant_remote_ems_control_mode') ==
+                 'Command Discharging (Output power from PV first)' }}  # ← REPLACE select entity
+          - condition: template
+            value_template: >-
+              {{ states('number.sigen_0_plant_grid_max_export_limit') | float(5) < 0.6 }}
+            # ← Confirms we own this session (export limit at bias-offset level, not peak level)
+            # ← REPLACE entity; adjust 0.6 if your bias offset rate is higher
+          - condition: or
+            conditions:
+              - condition: numeric_state
+                entity_id: sensor.sigen_0_plant_battery_soc  # ← REPLACE
+                above: 99.4  # ← ADJUST: battery full threshold
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"   # ← ADJUST: cheap/free rate window
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST: peak export window
+              - condition: state
+                entity_id: input_boolean.managed_period_active  # ← REPLACE: see note in README
+                state: "on"
+              - condition: template
+                value_template: >-
+                  {{ states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+                     and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0 }}
+                # ← REPLACE both DC charger sensor entity IDs
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.grid_bias_offset_active
+
+          - action: number.set_value
+            data:
+              value: 5  # ← REPLACE with your maximum export limit in kW
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+          # ← REPLACE device_id, entity_id and option
+          - device_id: YOUR_SIGEN_DEVICE_ID
+            domain: select
+            entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
+            type: select_option
+            option: "Maximum Self-consumption (Default)"
+
+          - delay: "00:00:02"
+
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_off
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+      # ── ACTIVATE: battery full, sustained low export, EMS off ────
+      - alias: "ACTIVATE: battery full, sustained low export detected"
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_plant_battery_soc  # ← REPLACE
+            above: 99.4
+          - condition: template
+            value_template: >-
+              {{ states('sensor.ewma_grid_active_power') | float(0) >
+                 -(states('input_number.grid_bias_offset_export_rate') | float(0) * 1000) }}
+            # ← REPLACE sensor.ewma_grid_active_power
+          - condition: not
+            conditions:
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"   # ← ADJUST: cheap/free rate window
+          - condition: not
+            conditions:
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST: peak export window
+          - condition: state
+            entity_id: input_boolean.managed_period_active  # ← REPLACE
+            state: "off"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "off"
+          - condition: not
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+                     and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0 }}
+                # ← REPLACE both DC charger sensor entity IDs
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE if different
+                state: "active"
+        sequence:
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_on
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.grid_bias_offset_active
+
+          - wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') != 'unavailable' }}"  # ← REPLACE
+            timeout: "00:00:30"
+            continue_on_timeout: false
+
+          - action: number.set_value
+            data:
+              value: "{{ states('input_number.grid_bias_offset_export_rate') | float(0.001) }}"
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+          # ← REPLACE device_id, entity_id and option
+          - device_id: YOUR_SIGEN_DEVICE_ID
+            domain: select
+            entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
+            type: select_option
+            option: "Command Discharging (Output power from PV first)"
+
+      # ── UPDATE: battery full, sustained low export, EMS already on
+      - alias: "UPDATE: battery full, bias offset already active"
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_plant_battery_soc  # ← REPLACE
+            above: 99.4
+          - condition: template
+            value_template: >-
+              {{ states('sensor.ewma_grid_active_power') | float(0) >
+                 -(states('input_number.grid_bias_offset_export_rate') | float(0) * 1000) }}
+            # ← REPLACE sensor.ewma_grid_active_power
+          - condition: not
+            conditions:
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"   # ← ADJUST: cheap/free rate window
+          - condition: not
+            conditions:
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST: peak export window
+          - condition: state
+            entity_id: input_boolean.managed_period_active  # ← REPLACE
+            state: "off"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "on"
+          - condition: template
+            value_template: >-
+              {{ states('select.sigen_0_plant_remote_ems_control_mode') ==
+                 'Command Discharging (Output power from PV first)' }}  # ← REPLACE select entity
+          - condition: not
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+                     and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0 }}
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE if different
+                state: "active"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.grid_bias_offset_active
+
+          - action: number.set_value
+            data:
+              value: "{{ states('input_number.grid_bias_offset_export_rate') | float(0.1) }}"
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+      # ── ACTIVATE: battery charging (SoC < 99.5%), EMS off ────────
+      - alias: "ACTIVATE: battery charging, EMS off"
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_plant_battery_soc  # ← REPLACE
+            below: 99.5
+          - condition: not
+            conditions:
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"   # ← ADJUST: cheap/free rate window
+          - condition: not
+            conditions:
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST: peak export window
+          - condition: state
+            entity_id: input_boolean.managed_period_active  # ← REPLACE
+            state: "off"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "off"
+          - condition: not
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+                     and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0 }}
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE if different
+                state: "active"
+        sequence:
+          # ← REPLACE device_id and entity_id with your Remote EMS switch
+          - type: turn_on
+            device_id: YOUR_SIGEN_DEVICE_ID
+            entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
+            domain: switch
+
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.grid_bias_offset_active
+
+          - wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') != 'unavailable' }}"  # ← REPLACE
+            timeout: "00:00:30"
+            continue_on_timeout: false
+
+          - action: number.set_value
+            data:
+              value: "{{ states('input_number.grid_bias_offset_export_rate') | float(0.001) }}"
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+
+          # ← REPLACE device_id, entity_id and option
+          - device_id: YOUR_SIGEN_DEVICE_ID
+            domain: select
+            entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
+            type: select_option
+            option: "Command Discharging (Output power from PV first)"
+
+      # ── UPDATE: battery charging, bias offset already active ─────
+      - alias: "UPDATE: battery charging, bias offset already active"
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.sigen_0_plant_battery_soc  # ← REPLACE
+            below: 99.5
+          - condition: not
+            conditions:
+              - condition: time
+                after: "11:00:00"
+                before: "14:00:00"   # ← ADJUST: cheap/free rate window
+          - condition: not
+            conditions:
+              - condition: time
+                after: "18:00:00"
+                before: "20:00:00"   # ← ADJUST: peak export window
+          - condition: state
+            entity_id: input_boolean.managed_period_active  # ← REPLACE
+            state: "off"
+          - condition: state
+            entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
+            state: "on"
+          - condition: template
+            value_template: >-
+              {{ states('select.sigen_0_plant_remote_ems_control_mode') ==
+                 'Command Discharging (Output power from PV first)' }}  # ← REPLACE select entity
+          - condition: not
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('sensor.sigen_0_dc_charger_1_running_state') == 'Charging'
+                     and states('sensor.sigen_0_dc_charger_1_output_power') | float(0) > 0 }}
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: timer.ev_dc_charger_stop_cooldown  # ← REPLACE if different
+                state: "active"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.grid_bias_offset_active
+
+          - action: number.set_value
+            data:
+              value: "{{ states('input_number.grid_bias_offset_export_rate') | float(0.1) }}"
+            target:
+              entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
