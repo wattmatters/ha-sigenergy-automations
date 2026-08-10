@@ -97,7 +97,7 @@ This compares a live solar forecast "power now" reading (e.g. from Solcast) agai
 
 - The default-branch fix described above is specific to systems using an EWMA-style filtered comparison with no hysteresis. If you redesign the ACTIVE branch's trigger condition to include hysteresis directly, you may be able to safely reintroduce a default release branch — but verify carefully against your own oscillation risk first.
 - The near-full SoC threshold (99.4–99.5%) is shared across several conditions in this automation. Keep these consistent if you adjust them — a mismatch between the RELEASE and ACTIVE thresholds could create a small dead zone or overlap.
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
 
