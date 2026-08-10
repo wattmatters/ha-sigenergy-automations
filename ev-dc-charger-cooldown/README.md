@@ -79,7 +79,7 @@ This ensures the automation only proceeds if the cooldown timer is not currently
 - This automation triggers on the **falling edge** — when charging stops. If the charger briefly pauses and restarts (e.g. during a charging session with multiple phases), the timer will restart each time. Adjust the cooldown duration to suit your charger's behaviour.
 - The `Charging` state value is specific to the sigenergy2mqtt integration. If you use Sigenergy Local Modbus, check the actual state value in Developer Tools → States and update the trigger template accordingly.
 - Only applicable if you have a DC-coupled EV charger connected to your Sigenergy system. AC-coupled chargers will have different sensors.
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
 
