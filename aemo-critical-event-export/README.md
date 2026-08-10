@@ -147,7 +147,7 @@ The automation sends persistent notifications to your HA dashboard for every sta
 - The automation is written for **SIGEN inverters** and uses device-action calls (by `device_id`) for the operating mode select. These cannot be replaced with simple entity service calls — you must supply your own `device_id`.
 - Time windows are hardcoded. If your tariff windows change seasonally, update them accordingly or consider converting to `input_datetime` helpers.
 - The automation assumes a **5 kW maximum export limit**. Adjust if your inverter or DNSP export limit differs.
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
 
