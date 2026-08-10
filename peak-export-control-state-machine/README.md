@@ -103,7 +103,7 @@ Same as the [original automation](../archive/peak-export-control/), plus the sta
 
 - The protective SoC floor (default 25%) should match whatever floor your suggested-rate calculator uses for genuine battery protection — if these two values drift apart, you could get inconsistent behaviour between the rate suggestion and the release decision.
 - `battery_capacity_kwh` is read from the live rated-capacity sensor with a fallback, consistent with the rest of this collection.
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
 
