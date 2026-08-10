@@ -139,7 +139,7 @@ If your system has different time windows or additional automations, the arbitra
 
 - The arbitrator polls every minute plus on AEMO state changes. If your time windows are very short or you need faster handover, consider adding more state triggers (as the bias offset and peak export consumer automations do).
 - This pattern assumes a small, fixed set of mutually exclusive consumers. If your system has automations that need to run *concurrently* (not just take turns), this single-owner model doesn't fit — you'd need a different coordination primitive (e.g. a set of independent flags rather than one selector).
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region.
 
 ---
 
