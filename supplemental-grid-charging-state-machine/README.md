@@ -74,7 +74,7 @@ Same as the [original automation](../archive/supplemental-grid-charging/), plus 
 
 - The 2-minute sustained-state requirement on `battery_supplemental_charging_required` matches the original's dwell-lock fix for a previously-identified flapping bug — don't remove this debounce when adapting.
 - The minimum charge rate during the free period (2.0 kW) is a fixed value — adjust to your preference.
-- Tested on **Home Assistant OS 17.3 / Core 2026.5.2 / Supervisor 2026.05.0** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
+- Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
 
