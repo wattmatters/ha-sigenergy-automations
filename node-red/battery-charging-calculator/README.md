@@ -75,11 +75,10 @@ Replace all `YOUR_` entity IDs in the poll-state nodes with your own:
 | `pv_generation` | PV Output Smoothed | Your smoothed PV power sensor (W) — see [node-red README](../README.md) |
 | `dc_charger_power` | DC EV Charger Output Power | Your DC charger output power sensor (W) — remove if no DC charger |
 | `dc_charger_state` | DC EV Charger Running State | Your DC charger running state sensor — remove if no DC charger |
-| `battery_rated_capacity` | Battery Rated Capacity | `sensor.sigen_0_inverter_1_rated_battery_capacity` or `input_number.battery_total_capacity` |
 
 **Note on household power sensor:** the sigenergy2mqtt integration exposes two relevant sensors — `sensor.sigen_0_consumed_power` and `sensor.sigen_0_total_load_power`. This flow uses `total_load_power` (← REPLACE with whichever your integration exposes). The staleness guard relies on the entity's `last_updated` timestamp being passed through the **Household Power Timestamp** Change node — ensure this node is wired correctly (the household power poll-state node feeds both the join node and the Change node, which in turn also feeds the join node with the timestamp as a separate topic).
 
-**Note on join node:** The join node is configured to wait for **11 inputs** (9 sensors + battery rated capacity + household power timestamp). If you remove the DC charger nodes, reduce this count accordingly — double-click the join node and adjust the **Count** field.
+**Note on join node:** The join node is configured to wait for **10 inputs** (9 sensors + household power timestamp). If you remove the DC charger nodes, reduce this count accordingly — double-click the join node and adjust the **Count** field.
 
 ---
 
@@ -100,7 +99,7 @@ The flow writes to these HA helpers (create them before deploying):
 
 - The `DAILY_HOUSEHOLD_CONSUMPTION` constant is a fixed estimate. If your household consumption varies significantly by season, consider making this an `input_number` helper so it can be adjusted without editing the flow.
 - The `MAX_CHARGING_RATE_KW` constant can alternatively be read from `sensor.sigen_0_inverter_1_rated_charging_power` if available — add a poll-state node for it and reference `msg.payload.max_charge_rate` in the function.
-- If DC charger nodes are removed, update the join node count from 11 to 9.
+- If DC charger nodes are removed, update the join node count from 10 to 8.
 - The dwell-time lock (5 minutes default) prevents the flow from responding faster than that to genuine threshold crossings. If your free period is short or conditions change rapidly, consider reducing `GRID_CHARGING_DWELL_MINUTES` — but be aware this reintroduces flapping risk near boundaries.
 - The household power staleness guard assumes the entity's `last_updated` timestamp is exposed by the HA websocket integration. If your entity doesn't expose this, the staleness check will always report stale and set free PV to zero — remove the Change node and the staleness guard in that case.
 - Tested on **Node-RED 4.1.10** with **node-red-contrib-home-assistant-websocket 0.80.3**, **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5**, and a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region.
