@@ -8,7 +8,7 @@ This is posted as a reference to adapt to your own system — not a plug-and-pla
 
 ## What it does
 
-Polls nine Home Assistant sensors every 60 seconds, joins them into a single object, and passes them to a JavaScript function that calculates a charging strategy. The result is written back to four HA helper entities consumed by the [Supplemental Grid Charging](../../supplemental-grid-charging/) automation.
+Polls eleven Home Assistant sensors every 60 seconds, joins them into a single object, and passes them to a JavaScript function that calculates a charging strategy. The result is written back to four HA helper entities consumed by the [Supplemental Grid Charging](../../supplemental-grid-charging-state-machine/) automation.
 
 ### Charging modes
 
@@ -28,6 +28,16 @@ Polls nine Home Assistant sensors every 60 seconds, joins them into a single obj
 
 When an EV is detected (by running state or measurable power), a latch timer holds the `evChargerActive` flag true for a configurable number of minutes after the EV stops. This prevents the system from dropping out of Remote EMS during brief pauses (e.g. cell balancing) mid-charge.
 
+### Dwell-time lock
+
+A 5-minute lock on `gridChargingRequired` flips prevents rapid on/off toggling of `input_boolean.battery_supplemental_charging_required` when sensor values sit near a threshold boundary (e.g. `availablePVForBattery` oscillating across the 0.5 kW line). A flip is only accepted once `GRID_CHARGING_DWELL_MINUTES` has elapsed since the last accepted flip. The reason string is prefixed with `[Hold Xmin - dwell lock]` when a flip is suppressed, making it visible in the HA dashboard.
+
+### Household power staleness guard
+
+If `household_power` hasn't updated within `HOUSEHOLD_POWER_MAX_AGE_MINUTES` (default 5 minutes), the flow treats it as stale and sets `availablePVForBattery` conservatively to zero. This guards against a scenario where a firmware push or Modbus link drop causes the sensor to latch on its last value rather than going unavailable, which would silently feed a stale reading into the charge-rate calculation. The reason string is prefixed with a warning when staleness is detected.
+
+A dedicated **Household Power Timestamp** Change node extracts the `last_updated` timestamp from the household power entity and passes it to the join node as a separate topic (`household_power_last_updated`), enabling this staleness check.
+
 ---
 
 ## Configuration
@@ -44,6 +54,8 @@ Open the **Calculate Charging Strategy** function node and edit the constants at
 | `CHARGE_RATE_DEADBAND_KW` | `0.5` | Prevents rate changes smaller than this value |
 | `PV_SMOOTHING_FACTOR` | `0.3` | EMA smoothing on PV reading (0=none, 1=full) |
 | `EV_LATCH_MINUTES` | `20` | ← REPLACE: minutes to hold EV active flag after charger stops |
+| `GRID_CHARGING_DWELL_MINUTES` | `5` | Minimum minutes between accepted gridChargingRequired flips — increase if flapping still observed |
+| `HOUSEHOLD_POWER_MAX_AGE_MINUTES` | `5` | Maximum age of household power reading before it is treated as stale |
 
 ---
 
@@ -57,14 +69,17 @@ Replace all `YOUR_` entity IDs in the poll-state nodes with your own:
 | `solar_remaining` | PV Forecast - Remaining Today | `sensor.solcast_pv_forecast_forecast_remaining_today` |
 | `solar_this_hour` | PV Forecast - This Hour | `sensor.solcast_pv_forecast_forecast_this_hour` |
 | `solar_next_hour` | PV Forecast - Next Hour | `sensor.solcast_pv_forecast_forecast_next_hour` |
-| `household_power` | Current Household Consumption | Your total consumed power sensor (W) |
+| `household_power` | Current Household Consumption | Your total load power sensor (W) — see note below |
+| `household_power_last_updated` | Household Power Timestamp | Extracted automatically from the household power entity's `last_updated` attribute via a Change node — no separate sensor needed |
 | `sunset_hour` | Sunset time | `sensor.sun_next_setting` |
 | `pv_generation` | PV Output Smoothed | Your smoothed PV power sensor (W) — see [node-red README](../README.md) |
 | `dc_charger_power` | DC EV Charger Output Power | Your DC charger output power sensor (W) — remove if no DC charger |
 | `dc_charger_state` | DC EV Charger Running State | Your DC charger running state sensor — remove if no DC charger |
 | `battery_rated_capacity` | Battery Rated Capacity | `sensor.sigen_0_inverter_1_rated_battery_capacity` or `input_number.battery_total_capacity` |
 
-**Note on join node:** The join node is configured to wait for **10 inputs** before firing (9 sensors + battery rated capacity). If you remove the DC charger nodes, reduce this count accordingly — double-click the join node and adjust the **Count** field.
+**Note on household power sensor:** the sigenergy2mqtt integration exposes two relevant sensors — `sensor.sigen_0_consumed_power` and `sensor.sigen_0_total_load_power`. This flow uses `total_load_power` (← REPLACE with whichever your integration exposes). The staleness guard relies on the entity's `last_updated` timestamp being passed through the **Household Power Timestamp** Change node — ensure this node is wired correctly (the household power poll-state node feeds both the join node and the Change node, which in turn also feeds the join node with the timestamp as a separate topic).
+
+**Note on join node:** The join node is configured to wait for **11 inputs** (9 sensors + battery rated capacity + household power timestamp). If you remove the DC charger nodes, reduce this count accordingly — double-click the join node and adjust the **Count** field.
 
 ---
 
@@ -85,8 +100,10 @@ The flow writes to these HA helpers (create them before deploying):
 
 - The `DAILY_HOUSEHOLD_CONSUMPTION` constant is a fixed estimate. If your household consumption varies significantly by season, consider making this an `input_number` helper so it can be adjusted without editing the flow.
 - The `MAX_CHARGING_RATE_KW` constant can alternatively be read from `sensor.sigen_0_inverter_1_rated_charging_power` if available — add a poll-state node for it and reference `msg.payload.max_charge_rate` in the function.
-- If DC charger nodes are removed, update the join node count from 10 to 8.
-- Tested on **Node-RED 4.1.10** with **node-red-contrib-home-assistant-websocket 0.80.3**, **Home Assistant OS 17.3 / Core 2026.5.2**, and a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region.
+- If DC charger nodes are removed, update the join node count from 11 to 9.
+- The dwell-time lock (5 minutes default) prevents the flow from responding faster than that to genuine threshold crossings. If your free period is short or conditions change rapidly, consider reducing `GRID_CHARGING_DWELL_MINUTES` — but be aware this reintroduces flapping risk near boundaries.
+- The household power staleness guard assumes the entity's `last_updated` timestamp is exposed by the HA websocket integration. If your entity doesn't expose this, the staleness check will always report stale and set free PV to zero — remove the Change node and the staleness guard in that case.
+- Tested on **Node-RED 4.1.10** with **node-red-contrib-home-assistant-websocket 0.80.3**, **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5**, and a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region.
 
 ---
 
