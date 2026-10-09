@@ -71,14 +71,14 @@ Several helpers are referenced across multiple automations. Create these once in
 
 | Entity | Type | Used by |
 |---|---|---|
-| `input_boolean.battery_export_enabled` | Toggle | AEMO Critical, Export Calculator (NR) — *no longer read by Peak Export (State Machine), see that automation's README* |
+| `input_boolean.battery_export_enabled` | Toggle | Export Calculator (NR) — *no longer read by Peak Export (State Machine) or AEMO Critical, see those automations' READMEs* |
 | `input_select.battery_control_owner` | Select | Arbitrated by the state machine; read by Peak Export, Supplemental Charging, and Bias Offset (all State Machine versions) |
 | `input_boolean.aemo_critical_override_active` | Toggle | AEMO Critical, Battery Control Ownership State Machine |
 | `input_boolean.aemo_pre_alert` | Toggle | AEMO Critical |
 | `input_boolean.aemo_critical_event` | Toggle | AEMO Critical |
 | `input_number.aemo_critical_threshold` | Number | AEMO Critical |
 | `input_number.aemo_pre_alert_threshold` | Number | AEMO Critical |
-| `input_number.aemo_nsw_spot_price` | Number | AEMO Critical |
+| `input_number.aemo_nsw_spot_price` | Number | AEMO Critical — *set its maximum above the market price cap, see that automation's README* |
 | `input_number.battery_peak_export_maximum_rate` | Number | Peak Export, Export Calculator (NR) |
 | `input_number.battery_minimum_export_rate_zero_hero` | Number | Peak Export |
 | `input_number.battery_minimum_soc_end_of_export` | Number | Peak Export |
