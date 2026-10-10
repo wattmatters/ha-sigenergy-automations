@@ -40,7 +40,7 @@ Event ends?
 Four rules the automation follows. Keep them if you adapt it — each one exists because breaking it caused a real failure (see [Change history](#change-history)).
 
 1. **Hardware first, bookkeeping last.** Logging the spot price to a helper is informational, so it runs after the inverter actions, is clamped to the helper's own min/max, and has `continue_on_error`. Nothing that only records information should be able to stop the export from starting.
-2. **Clear `aemo_critical_override_active` last, on every exit path.** If you use the [Battery Control Ownership State Machine](../battery-control-state-machine/), it hands control back to the other automations the moment this flag turns off. Clearing it before the hardware restore has finished means two automations write to the inverter at once.
+2. **Clear `aemo_critical_override_active` last, on every exit path.** If you use the [Battery Control Ownership State Machine](../battery-control-state-machine/), it hands control back to the other automations the moment this flag turns off. Clearing it before the hardware restore has finished means two automations write to the inverter at once. Finished means confirmed, not just commanded: where the restore turns Remote EMS off, the automation waits for the switch to report off, because the next automation decides what to do from the state it reads.
 3. **Restore steps carry `continue_on_error`**, so one failed step cannot leave the override flag stuck on.
 4. **After turning Remote EMS on, wait for the operating mode select to become available** before setting the mode, instead of using a fixed delay. The wait continues on timeout so the 1-minute monitor can re-assert the mode; aborting there would leave the override flag on with no mode set.
 
@@ -166,7 +166,7 @@ The automation sends persistent notifications to your HA dashboard for every sta
 - During an override the battery exports at the maximum rate down to the **5 kWh reserve** only. It does not apply any other floor you may use elsewhere, such as an overnight SoC target or a minimum export rate.
 - If a critical event starts while the battery is already below the reserve, the run stops at the battery check: nothing is exported and the spot price is not logged for that event.
 - The 1-minute monitor trigger means the automation runs every minute all day. `trace: stored_traces: 50` is set so the trace of a real event survives long enough to inspect; raise it if you need longer.
-- The start, monitor and end paths have been checked against the configuration running on the author's system, but the October 2026 changes below have **not yet been exercised by a real critical event**.
+- The October 2026 changes below have been exercised by one **simulated** event on the author's system (critical threshold lowered below the spot price for about a minute, outside the charging and peak windows, starting with Remote EMS off). Not yet exercised by a real or simulated event: a price above the helper's range, a start with Remote EMS already on, the battery reserve exit, events ending inside the charging or peak windows, and the monitor's re-assert branch.
 - Tested on **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, using the **sigenergy2mqtt** add-on integration.
 
 ---
@@ -183,6 +183,7 @@ Changes made:
 - **End branch** now always clears `aemo_critical_event` when the price drops back; the hardware restore still only runs if the override took control.
 - **Override flag cleared last** on both exit paths (event end and battery reserve reached), with `continue_on_error` on the restore steps (design rules 2 and 3). Previously the flag was cleared first, which let the state machine's incoming automation run at the same time as this automation's restore.
 - **Settle wait** replaces the fixed 2-second delay after turning Remote EMS on, and the mode is now set before the export limit (design rule 4).
+- **Wait for Remote EMS to report off** added before the override flag is cleared, on the two exit paths that turn it off (design rule 2). Found in a simulated event: the switch confirmed about a second after the command, so the state machine's next automation started while Remote EMS still read "on" and repeated the release sequence. That was harmless with a full battery, but with the bias offset in its active mode it would have skipped turning Remote EMS back on.
 - **Monitor** re-asserts Remote EMS, the operating mode and the export limit whenever any has drifted. Previously it did nothing unless Remote EMS was off.
 - **`input_boolean.battery_export_enabled` removed** from the "already exporting" check. That helper is no longer required by this automation.
 - **`trace: stored_traces: 50`** added.
