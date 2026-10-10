@@ -34,7 +34,10 @@ description: >-
 # 2. Clear input_boolean.aemo_critical_override_active LAST on every
 #    exit path. The Battery Control Ownership State Machine hands
 #    control back to the other automations the moment this flag goes
-#    off, so the hardware restore has to be finished by then.
+#    off, so the hardware restore has to be finished by then. Where the
+#    restore turns Remote EMS off, wait for the switch to REPORT off
+#    first: a command that has been sent is not yet a state the next
+#    automation can read.
 #
 # 3. Restore steps carry continue_on_error so one failed step cannot
 #    leave the override flag stuck on.
@@ -347,6 +350,12 @@ actions:
                     entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                     domain: switch
                     continue_on_error: true
+                  # The switch takes about a second to confirm. Without this wait the
+                  # next owner starts while Remote EMS still reads "on" (design rule 2).
+                  - alias: Wait for Remote EMS to report off before handing control back
+                    wait_template: "{{ is_state('switch.sigen_0_plant_remote_ems', 'off') }}"  # ← REPLACE
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
                   # ← REPLACE available discharge energy sensor in the message
                   - action: persistent_notification.create
                     continue_on_error: true
@@ -514,6 +523,12 @@ actions:
                 entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                 domain: switch
                 continue_on_error: true
+              # The switch takes about a second to confirm. Without this wait the
+              # next owner starts while Remote EMS still reads "on" (design rule 2).
+              - alias: Wait for Remote EMS to report off before handing control back
+                wait_template: "{{ is_state('switch.sigen_0_plant_remote_ems', 'off') }}"  # ← REPLACE
+                timeout: "00:00:10"
+                continue_on_timeout: true
               - action: persistent_notification.create
                 continue_on_error: true
                 data:
