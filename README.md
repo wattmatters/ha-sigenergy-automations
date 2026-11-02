@@ -2,7 +2,7 @@
 
 A collection of Home Assistant automations for **Sigenergy energy controller owners** in the Australian NEM, shared as examples for adaptation to your own system.
 
-These automations were developed and tested on a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, running **Home Assistant OS 18.2 / Core 2026.7.4 / Supervisor 2026.07.5** with the [sigenergy2mqtt](https://github.com/seud0nym/home-assistant-addons/tree/main/sigenergy2mqtt) add-on integration.
+These automations were developed and tested on a **Sigenergy 12 kW Single Phase Energy Controller** in the NSW NEM region, running **Home Assistant OS 18.4 / Core 2026.10.4 / Supervisor 2026.10.5** with the **[sigenergy2mqtt](https://github.com/seud0nym/home-assistant-addons/tree/main/sigenergy2mqtt) HA app version 2026.10.10**.
 
 > **Important:** These are not plug-and-play solutions. They are posted as working examples to help others understand the approach and adapt it to their own system, tariff, and configuration. You will need to update entity IDs, time windows, thresholds, and helper references to suit your setup.
 
@@ -76,8 +76,8 @@ Several helpers are referenced across multiple automations. Create these once in
 | `input_boolean.aemo_critical_override_active` | Toggle | AEMO Critical, Battery Control Ownership State Machine |
 | `input_boolean.aemo_pre_alert` | Toggle | AEMO Critical |
 | `input_boolean.aemo_critical_event` | Toggle | AEMO Critical |
-| `input_number.aemo_critical_threshold` | Number | AEMO Critical |
-| `input_number.aemo_pre_alert_threshold` | Number | AEMO Critical |
+| `input_number.aemo_critical_price_threshold` | Number | AEMO Critical |
+| `input_number.aemo_pre_alert_price_threshold` | Number | AEMO Critical |
 | `input_number.aemo_nsw_spot_price` | Number | AEMO Critical — *set its maximum above the market price cap, see that automation's README* |
 | `input_number.battery_peak_export_maximum_rate` | Number | Peak Export, Export Calculator (NR) |
 | `input_number.battery_minimum_export_rate_zero_hero` | Number | Peak Export |
