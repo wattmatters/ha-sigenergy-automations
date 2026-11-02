@@ -1,98 +1,83 @@
 alias: "SIGEN - AEMO CRITICAL EVENT EXPORT CONTROL"
 description: >-
-  Manages battery export during AEMO critical price events using the native HACS
-  AEMO NEM integration. Monitors realtime price with predictive pre-alert from the
-  5-minute forecast. Intervenes only when not already exporting at maximum rate.
+  Manages battery export during AEMO critical price events using the AEMO NEM
+  Web HACS integration. Monitors the realtime price with a predictive
+  pre-alert from the 5-minute forecast. Intervenes only when not already
+  exporting at the maximum rate. Shared as an example — adapt sensor IDs,
+  time windows and limits to your own system.
 
 # ─────────────────────────────────────────────────────────────────
 # CONFIGURATION — edit these to match your system
 # ─────────────────────────────────────────────────────────────────
 #
-# Replace the sensor/entity IDs below with the ones from YOUR system.
-# All substitutions are marked with a comment beginning with ← REPLACE
+# ← REPLACE all entity IDs and device_id values with your own.
+# Use Developer Tools → States to find the correct entity IDs.
 #
 # AEMO region sensor prefix: sensor.aemo_nemweb_<REGION>_
 #   e.g. NSW1 → sensor.aemo_nemweb_nsw1_realtime_price
 #        VIC1 → sensor.aemo_nemweb_vic1_realtime_price
 #
-# SIGEN entity prefix: sensor/number/switch/select.sigen_0_...
-#   Check your SIGEN integration for the exact entity IDs.
+# Hardware actions (Remote EMS switch, operating mode select) use device
+# actions, so they need YOUR_SIGEN_DEVICE_ID plus the entity registry ID
+# of each entity. State CHECKS use normal entity IDs.
 #
-# Device actions (Remote EMS switch, operating mode select) use the
-# YOUR_SIGEN_* placeholders — see the README for how to find yours.
+# input_boolean.aemo_critical_override_active is the flag the Battery
+# Control Ownership State Machine reads to give this automation top
+# priority. It is deliberately turned off LAST in each exit path, only
+# after the hardware has been handed back, so ownership does not pass to
+# another automation while this one is still mid-restore.
 #
-# ─────────────────────────────────────────────────────────────────
-# DESIGN RULES — keep these if you adapt the automation
-# ─────────────────────────────────────────────────────────────────
-#
-# 1. Hardware first, bookkeeping last. Writing the spot price to
-#    input_number.aemo_nsw_spot_price is logging only, so it runs AFTER
-#    the inverter actions, is clamped to the helper's own min/max, and
-#    has continue_on_error. A price above the helper's max must never
-#    be able to stop the export from starting.
-#
-# 2. Clear input_boolean.aemo_critical_override_active LAST on every
-#    exit path. The Battery Control Ownership State Machine hands
-#    control back to the other automations the moment this flag goes
-#    off, so the hardware restore has to be finished by then. Where the
-#    restore turns Remote EMS off, wait for the switch to REPORT off
-#    first: a command that has been sent is not yet a state the next
-#    automation can read.
-#
-# 3. Restore steps carry continue_on_error so one failed step cannot
-#    leave the override flag stuck on.
-#
-# 4. After turning Remote EMS on, wait for the operating mode select
-#    to become available before setting the mode.
+# Key values to adjust:
+#   - Peak export window (17:59:50–20:00:00)
+#   - Cheap/free-rate charging window (10:59:50–14:00:00)
+#   - Minimum battery reserve (5 kWh)
+#   - Maximum export limit (5 kW)
 #
 # ─────────────────────────────────────────────────────────────────
 
 variables:
   # ← REPLACE region prefix as needed (nsw1, vic1, sa1, qld1, etc.)
+  # The sensor reports $/kWh; multiplied by 1000 for $/MWh display values.
   realtime_price_mwh: >-
     {{ (states('sensor.aemo_nemweb_nsw1_realtime_price') | float(0) * 1000) | round(0) }}
   forecast_price_mwh: >-
     {{ (states('sensor.aemo_nemweb_nsw1_5min_forecast') | float(0) * 1000) | round(0) }}
   critical_threshold: >-
-    {{ states('input_number.aemo_critical_threshold') | float(3) }}
+    {{ states('input_number.aemo_critical_price_threshold') | float(3) }}
   pre_alert_threshold: >-
-    {{ states('input_number.aemo_pre_alert_threshold') | float(2) }}
+    {{ states('input_number.aemo_pre_alert_price_threshold') | float(2) }}
 
 mode: queued
 max: 5
 
-# The 1-minute monitor trigger fills the default 5 stored traces within
-# 5 minutes, so the trace of a real event is gone before you can look at it.
-trace:
-  stored_traces: 50
-
 triggers:
-  # ← REPLACE region in all four template triggers.
-  # The threshold helpers must exist under exactly these names: if one is
-  # missing, the float(3) / float(2) fallback is used silently.
   - trigger: template
+    id: critical_event_start
     value_template: >-
       {{ states('sensor.aemo_nemweb_nsw1_realtime_price') | float(0) >
-         states('input_number.aemo_critical_threshold') | float(3) }}
-    id: critical_event_start
+         states('input_number.aemo_critical_price_threshold') | float(3) }}
+    # ← REPLACE region
 
   - trigger: template
+    id: critical_event_end
     value_template: >-
       {{ states('sensor.aemo_nemweb_nsw1_realtime_price') | float(0) <
-         states('input_number.aemo_critical_threshold') | float(3) }}
-    id: critical_event_end
+         states('input_number.aemo_critical_price_threshold') | float(3) }}
+    # ← REPLACE region
 
   - trigger: template
+    id: pre_alert_start
     value_template: >-
       {{ states('sensor.aemo_nemweb_nsw1_5min_forecast') | float(0) >
-         states('input_number.aemo_pre_alert_threshold') | float(2) }}
-    id: pre_alert_start
+         states('input_number.aemo_pre_alert_price_threshold') | float(2) }}
+    # ← REPLACE region
 
   - trigger: template
+    id: pre_alert_end
     value_template: >-
       {{ states('sensor.aemo_nemweb_nsw1_5min_forecast') | float(0) <
-         states('input_number.aemo_pre_alert_threshold') | float(2) }}
-    id: pre_alert_end
+         states('input_number.aemo_pre_alert_price_threshold') | float(2) }}
+    # ← REPLACE region
 
   - trigger: time_pattern
     minutes: "/1"
@@ -113,15 +98,16 @@ actions:
               entity_id: input_boolean.aemo_critical_event
 
           # Only proceed if sufficient battery charge remains.
-          # If this fails the run stops here: no export, and the spot price
-          # is not logged for this event.
+          # NOTE: a failed condition step ends this run, so the "Insufficient
+          # Battery" default notification in the choose block below is only
+          # reachable if this condition is moved inside the choose.
           - condition: numeric_state
             entity_id: sensor.sigen_0_inverter_1_available_battery_discharge_energy  # ← REPLACE
             above: 5  # kWh — adjust your minimum reserve
 
           - choose:
 
-              # Scenario A: Already exporting at max during peak window — no action needed
+              # Scenario A: already exporting at max during the peak window — no action needed
               - conditions:
                   - condition: time
                     after: "17:59:50"
@@ -129,10 +115,10 @@ actions:
                   - condition: state
                     entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
                     state: "on"
-                  # ← REPLACE export limit entity
                   - condition: template
                     value_template: >-
                       {{ states('number.sigen_0_plant_grid_max_export_limit') | float >= 4.5 }}
+                    # ← REPLACE entity; ~90% of your max export limit
                 sequence:
                   - action: persistent_notification.create
                     data:
@@ -142,11 +128,11 @@ actions:
                         Critical event detected at ${{ realtime_price_mwh }}/MWh.
                         Already exporting at maximum rate during peak period. No intervention needed.
 
-              # Scenario B: Solar charging window — override to export
+              # Scenario B: cheap-rate charging window — override charging and export
               - conditions:
                   - condition: time
                     after: "10:59:50"
-                    before: "14:00:00"  # ← ADJUST to your solar / cheap-rate window
+                    before: "14:00:00"  # ← ADJUST to your cheap/free-rate window
                   - condition: state
                     entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
                     state: "on"
@@ -160,7 +146,7 @@ actions:
                     target:
                       entity_id: number.sigen_0_plant_max_charging_limit  # ← REPLACE
                   - delay: "00:00:02"
-                  # ← REPLACE device_id, entity_id and option with your SIGEN select entity
+                  # ← REPLACE device_id, entity_id and option with your SIGEN mode select
                   - device_id: YOUR_SIGEN_DEVICE_ID
                     domain: select
                     entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
@@ -169,7 +155,7 @@ actions:
                   - delay: "00:00:02"
                   - action: number.set_value
                     data:
-                      value: 5  # kW — adjust to your inverter's max export
+                      value: 5  # ← REPLACE with your maximum export limit in kW
                     target:
                       entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
                   - action: persistent_notification.create
@@ -194,15 +180,11 @@ actions:
                     device_id: YOUR_SIGEN_DEVICE_ID
                     entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                     domain: switch
-                  # The mode select is briefly unavailable after Remote EMS turns on.
-                  # Continues on timeout so the 1-minute monitor can re-assert the
-                  # mode, rather than aborting with the override flag on and no mode set.
-                  - alias: Settle wait after Remote EMS on
-                    wait_template: >-
-                      {{ states('select.sigen_0_plant_remote_ems_control_mode') not in ['unavailable', 'unknown'] }}
+                  - alias: "Settle wait after Remote EMS on"
+                    wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') not in ['unavailable', 'unknown'] }}"  # ← REPLACE
                     timeout: "00:00:30"
                     continue_on_timeout: true
-                  # ← REPLACE device_id, entity_id and option with your SIGEN select entity
+                  # ← REPLACE device_id, entity_id and option with your SIGEN mode select
                   - device_id: YOUR_SIGEN_DEVICE_ID
                     domain: select
                     entity_id: YOUR_SIGEN_OPERATING_MODE_SELECT_ENTITY_ID
@@ -211,7 +193,7 @@ actions:
                     continue_on_error: true
                   - action: number.set_value
                     data:
-                      value: 5  # ← REPLACE with your max export kW
+                      value: 5  # ← REPLACE
                     target:
                       entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
                     continue_on_error: true
@@ -229,17 +211,17 @@ actions:
                   - condition: state
                     entity_id: switch.sigen_0_plant_remote_ems  # ← REPLACE
                     state: "on"
-                  # ← REPLACE export limit entity
                   - condition: template
                     value_template: >-
                       {{ states('number.sigen_0_plant_grid_max_export_limit') | float < 4.5 }}
+                    # ← REPLACE entity
                 sequence:
                   - action: input_boolean.turn_on
                     target:
                       entity_id: input_boolean.aemo_critical_override_active
                   - action: number.set_value
                     data:
-                      value: 5  # ← REPLACE with your max export kW
+                      value: 5  # ← REPLACE
                     target:
                       entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
                   - action: persistent_notification.create
@@ -250,9 +232,8 @@ actions:
                         Critical event at ${{ realtime_price_mwh }}/MWh.
                         Increased export rate to maximum (5 kW).
 
-            # Default: none of the scenarios above matched
+            # Default: battery too low (see NOTE on the condition above)
             default:
-              # ← REPLACE available discharge energy sensor in the message
               - action: persistent_notification.create
                 data:
                   notification_id: aemo_critical_status
@@ -263,16 +244,14 @@ actions:
                     ({{ states('sensor.sigen_0_inverter_1_available_battery_discharge_energy') }} kWh available).
                     Minimum 5 kWh reserve maintained for backup power.
 
-          # Log the spot price LAST (design rule 1): clamped to the helper's own
-          # min/max, and allowed to fail without affecting the export above.
+          # Record the current spot price, clamped to the helper's own min/max
           - action: input_number.set_value
             continue_on_error: true
             target:
-              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different (here and in the template)
+              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different
             data:
               value: >-
-                {{ [[realtime_price_mwh | float(0),
-                     state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
+                {{ [[realtime_price_mwh | float(0), state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
                     state_attr('input_number.aemo_nsw_spot_price', 'min') | float(-1000)] | max }}
 
       # ── PRE-ALERT START ──────────────────────────────────────────
@@ -290,7 +269,6 @@ actions:
               message: >-
                 Price forecast: ${{ forecast_price_mwh }}/MWh
                 Realtime: ${{ realtime_price_mwh }}/MWh
-
                 Forecast indicates potential critical event approaching.
                 Monitor battery charge status - may need to preserve capacity for export.
 
@@ -306,7 +284,7 @@ actions:
             data:
               notification_id: aemo_pre_alert_status
 
-      # ── 1-MINUTE MONITOR (while override active) ─────────────────
+      # ── 1-MINUTE MONITOR (while an override is active) ───────────
       - conditions:
           - condition: trigger
             id: monitor_during_event
@@ -320,17 +298,14 @@ actions:
           - action: input_number.set_value
             continue_on_error: true
             target:
-              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different (here and in the template)
+              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different
             data:
               value: >-
-                {{ [[realtime_price_mwh | float(0),
-                     state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
+                {{ [[realtime_price_mwh | float(0), state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
                     state_attr('input_number.aemo_nsw_spot_price', 'min') | float(-1000)] | max }}
 
           - choose:
-              # Battery hit minimum — stop exporting.
-              # Hardware is restored first; the override flag is cleared LAST
-              # (design rule 2).
+              # Battery hit the minimum reserve — stop exporting and hand back
               - conditions:
                   - condition: numeric_state
                     entity_id: sensor.sigen_0_inverter_1_available_battery_discharge_energy  # ← REPLACE
@@ -350,15 +325,11 @@ actions:
                     entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                     domain: switch
                     continue_on_error: true
-                  # The switch takes about a second to confirm. Without this wait the
-                  # next owner starts while Remote EMS still reads "on" (design rule 2).
-                  - alias: Wait for Remote EMS to report off before handing control back
+                  - alias: "Wait for Remote EMS to report off before handing control back"
                     wait_template: "{{ is_state('switch.sigen_0_plant_remote_ems', 'off') }}"  # ← REPLACE
                     timeout: "00:00:10"
                     continue_on_timeout: true
-                  # ← REPLACE available discharge energy sensor in the message
                   - action: persistent_notification.create
-                    continue_on_error: true
                     data:
                       notification_id: aemo_critical_status
                       title: "🛑 AEMO Critical - Battery Low"
@@ -367,12 +338,14 @@ actions:
                         ({{ states('sensor.sigen_0_inverter_1_available_battery_discharge_energy') }} kWh).
                         Export stopped to maintain 5 kWh backup reserve.
                         Event still active at ${{ realtime_price_mwh }}/MWh.
+                    continue_on_error: true
+                  # Override flag goes off LAST, after the hardware hand-back
                   - action: input_boolean.turn_off
                     target:
                       entity_id: input_boolean.aemo_critical_override_active
 
-              # Remote EMS, operating mode or export limit has drifted — re-assert all three
-              - alias: Re-assert override hardware state if Remote EMS, control mode or export limit has drifted
+              # Hardware has drifted from the override state — re-assert it
+              - alias: "Re-assert override hardware state if Remote EMS, control mode or export limit has drifted"
                 conditions:
                   - condition: or
                     conditions:
@@ -398,9 +371,8 @@ actions:
                         device_id: YOUR_SIGEN_DEVICE_ID
                         entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                         domain: switch
-                      - alias: Settle wait after Remote EMS on
-                        wait_template: >-
-                          {{ states('select.sigen_0_plant_remote_ems_control_mode') not in ['unavailable', 'unknown'] }}
+                      - alias: "Settle wait after Remote EMS on"
+                        wait_template: "{{ states('select.sigen_0_plant_remote_ems_control_mode') not in ['unavailable', 'unknown'] }}"  # ← REPLACE
                         timeout: "00:00:30"
                         continue_on_timeout: true
                   - if:
@@ -419,14 +391,12 @@ actions:
                         continue_on_error: true
                   - action: number.set_value
                     data:
-                      value: 5  # ← REPLACE with your max export kW
+                      value: 5  # ← REPLACE
                     target:
                       entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
                     continue_on_error: true
 
       # ── CRITICAL EVENT END ───────────────────────────────────────
-      # Fires whenever the price drops back below the threshold, whether or
-      # not the override took control, so aemo_critical_event always clears.
       - conditions:
           - condition: trigger
             id: critical_event_end
@@ -437,24 +407,23 @@ actions:
           - action: input_number.set_value
             continue_on_error: true
             target:
-              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different (here and in the template)
+              entity_id: input_number.aemo_nsw_spot_price  # ← REPLACE if different
             data:
               value: >-
-                {{ [[realtime_price_mwh | float(0),
-                     state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
+                {{ [[realtime_price_mwh | float(0), state_attr('input_number.aemo_nsw_spot_price', 'max') | float(30000)] | min,
                     state_attr('input_number.aemo_nsw_spot_price', 'min') | float(-1000)] | max }}
 
-          # Hardware is only restored if the override actually took control
+          # Only restore if this automation actually took an override
           - condition: state
             entity_id: input_boolean.aemo_critical_override_active
             state: "on"
 
           - choose:
-              # End during solar/charging window — restore charging
+              # Ended during the cheap-rate window — restore charging mode
               - conditions:
                   - condition: time
                     after: "10:59:50"
-                    before: "14:00:00"  # ← ADJUST to match your solar window
+                    before: "14:00:00"   # ← ADJUST to your cheap/free-rate window
                 sequence:
                   # ← REPLACE device_id, entity_id and option
                   - device_id: YOUR_SIGEN_DEVICE_ID
@@ -465,8 +434,9 @@ actions:
                     continue_on_error: true
                   - delay: "00:00:02"
                   - action: number.set_value
-                    continue_on_error: true
                     data:
+                      # 16.5 = the author's charge-rate ceiling in kW; consider reading
+                      # sensor.sigen_0_inverter_1_rated_charging_power instead
                       value: >-
                         {% set rate = states('input_number.battery_charge_suggested_rate') | float(0) %}
                         {% if rate <= 0 %}
@@ -476,31 +446,32 @@ actions:
                         {% endif %}
                     target:
                       entity_id: number.sigen_0_plant_max_charging_limit  # ← REPLACE
-                  - action: persistent_notification.create
                     continue_on_error: true
+                  - action: persistent_notification.create
                     data:
                       notification_id: aemo_critical_status
                       title: "✅ AEMO Critical Ended - Charging Restored"
                       message: >-
                         Critical event ended. Price now ${{ realtime_price_mwh }}/MWh.
                         Restored charging automation control.
+                    continue_on_error: true
 
-              # End during peak window — continue normal export, no change needed
+              # Ended during the peak window — continue normal export
               - conditions:
                   - condition: time
                     after: "17:59:50"
-                    before: "20:00:00"  # ← ADJUST to match your peak window
+                    before: "20:00:00"   # ← ADJUST to your peak export window
                 sequence:
                   - action: persistent_notification.create
-                    continue_on_error: true
                     data:
                       notification_id: aemo_critical_status
                       title: "✅ AEMO Critical Ended - Peak Export Active"
                       message: >-
                         Critical event ended. Price now ${{ realtime_price_mwh }}/MWh.
                         Peak export period still active - continuing normal export.
+                    continue_on_error: true
 
-            # Default: Return to self-consumption mode
+            # Default: return to self-consumption
             default:
               # ← REPLACE device_id, entity_id and option
               - device_id: YOUR_SIGEN_DEVICE_ID
@@ -511,11 +482,11 @@ actions:
                 continue_on_error: true
               - delay: "00:00:02"
               - action: number.set_value
-                continue_on_error: true
                 data:
-                  value: 5  # ← REPLACE with your normal export limit kW
+                  value: 5  # ← REPLACE with your normal export limit in kW
                 target:
                   entity_id: number.sigen_0_plant_grid_max_export_limit  # ← REPLACE
+                continue_on_error: true
               - delay: "00:00:02"
               # ← REPLACE device_id and entity_id with your Remote EMS switch
               - type: turn_off
@@ -523,23 +494,20 @@ actions:
                 entity_id: YOUR_SIGEN_REMOTE_EMS_SWITCH_ENTITY_ID
                 domain: switch
                 continue_on_error: true
-              # The switch takes about a second to confirm. Without this wait the
-              # next owner starts while Remote EMS still reads "on" (design rule 2).
-              - alias: Wait for Remote EMS to report off before handing control back
+              - alias: "Wait for Remote EMS to report off before handing control back"
                 wait_template: "{{ is_state('switch.sigen_0_plant_remote_ems', 'off') }}"  # ← REPLACE
                 timeout: "00:00:10"
                 continue_on_timeout: true
               - action: persistent_notification.create
-                continue_on_error: true
                 data:
                   notification_id: aemo_critical_status
                   title: "✅ AEMO Critical Ended - Normal Mode"
                   message: >-
                     Critical event ended. Price now ${{ realtime_price_mwh }}/MWh.
                     Returned to self-consumption mode.
+                continue_on_error: true
 
-          # Clear the override flag LAST (design rule 2). This is what hands
-          # control back to the state machine's other automations.
+          # Override flag goes off LAST, after the hardware has been handed back
           - action: input_boolean.turn_off
             target:
               entity_id: input_boolean.aemo_critical_override_active
